@@ -13,24 +13,57 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Extract project ZIP
+      - name: Prepare Android project
+        shell: bash
         run: |
-          unzip -o SBhStudio_ready.zip -d temp_extract
+          set -e
 
-          GRADLEW_PATH=$(find temp_extract -name "gradlew" -type f | head -n 1)
+          echo "=== Contenu du dépôt ==="
+          ls -la
+
+          # Si le projet Gradle est déjà à la racine
+          if [ -f "./gradlew" ]; then
+            echo "Projet Gradle trouvé directement à la racine."
+            chmod +x ./gradlew
+            exit 0
+          fi
+
+          # Sinon, chercher un ZIP contenant le projet
+          ZIP_PATH=$(find . -maxdepth 3 -type f -name "*.zip" | head -n 1)
+
+          if [ -z "$ZIP_PATH" ]; then
+            echo "ERREUR : Aucun projet Gradle et aucun ZIP trouvé."
+            echo "Fichiers disponibles :"
+            find . -maxdepth 3 -type f | sort
+            exit 1
+          fi
+
+          echo "ZIP trouvé : $ZIP_PATH"
+
+          mkdir -p temp_extract
+          unzip -o "$ZIP_PATH" -d temp_extract
+
+          # Chercher gradlew dans le ZIP
+          GRADLEW_PATH=$(find temp_extract -type f -name "gradlew" | head -n 1)
 
           if [ -z "$GRADLEW_PATH" ]; then
-            echo "Erreur : gradlew introuvable dans le ZIP."
+            echo "ERREUR : gradlew introuvable dans le ZIP."
+            find temp_extract -maxdepth 4 -type f | sort
             exit 1
           fi
 
           PROJECT_DIR=$(dirname "$GRADLEW_PATH")
 
-          cp -r "$PROJECT_DIR"/. .
+          echo "Projet trouvé dans : $PROJECT_DIR"
 
-          chmod +x gradlew
+          cp -a "$PROJECT_DIR"/. .
+
+          chmod +x ./gradlew
 
           rm -rf temp_extract
+
+          echo "=== Projet préparé ==="
+          ls -la
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -47,10 +80,12 @@ jobs:
           ./gradlew --version
 
       - name: Build APK with Gradle
-        run: ./gradlew assembleDebug --no-daemon
+        run: |
+          ./gradlew assembleDebug --no-daemon
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: app-debug
           path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
