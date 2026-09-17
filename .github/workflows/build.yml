@@ -13,6 +13,57 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Prepare Android project
+        shell: bash
+        run: |
+          set -e
+
+          echo "=== Contenu du dépôt ==="
+          find . -maxdepth 3 -type f | sort
+
+          # Projet déjà présent à la racine
+          if [ -f "./gradlew" ]; then
+            echo "Projet Gradle trouvé à la racine."
+            chmod +x ./gradlew
+            echo "PROJECT_DIR=." >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          # Recherche du ZIP
+          ZIP_PATH=$(find . -maxdepth 3 -type f -name "*.zip" | head -n 1)
+
+          if [ -z "$ZIP_PATH" ]; then
+            echo "ERREUR : aucun gradlew et aucun ZIP trouvé."
+            exit 1
+          fi
+
+          echo "ZIP trouvé : $ZIP_PATH"
+
+          rm -rf temp_extract
+          mkdir -p temp_extract
+
+          unzip -o "$ZIP_PATH" -d temp_extract
+
+          echo "=== Contenu extrait ==="
+          find temp_extract -maxdepth 5 -type f | sort
+
+          # Recherche du Gradle Wrapper
+          GRADLEW_PATH=$(find temp_extract -type f -name "gradlew" | head -n 1)
+
+          if [ -z "$GRADLEW_PATH" ]; then
+            echo "ERREUR : gradlew introuvable dans le ZIP."
+            echo "Vérifie que le ZIP contient bien un projet Android Gradle complet."
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$GRADLEW_PATH")
+
+          echo "Projet Android trouvé dans : $PROJECT_DIR"
+
+          chmod +x "$PROJECT_DIR/gradlew"
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -22,15 +73,42 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Make gradlew executable
-        run: chmod +x ./gradlew
+      - name: Check project
+        shell: bash
+        run: |
+          set -e
+
+          echo "Projet utilisé : $PROJECT_DIR"
+
+          cd "$PROJECT_DIR"
+
+          echo "=== Projet ==="
+          ls -la
+
+          echo "=== Gradle ==="
+          ./gradlew --version
 
       - name: Build APK
-        run: ./gradlew assembleDebug --no-daemon
+        shell: bash
+        run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
+          echo "=== Compilation SBh Studio ==="
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Locate APK
+        shell: bash
+        run: |
+          set -e
+
+          echo "=== APK générés ==="
+          find "$PROJECT_DIR" -type f -name "*.apk" -print
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: SBhStudio-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: '**/build/outputs/apk/debug/*.apk'
           if-no-files-found: error
