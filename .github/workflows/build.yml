@@ -16,11 +16,11 @@ jobs:
     - name: Extract project ZIP
       run: |
         unzip -o SBhStudio_ready.zip -d temp_extract
-        # Déplace tout le contenu du sous-dossier vers la racine si nécessaire
-        if [ -d "temp_extract/SBhStudio_ready" ]; then
-          mv temp_extract/SBhStudio_ready/* .
-        else
-          mv temp_extract/* .
+        # Cherche où se trouve gradlew et déplace tout le contenu de ce dossier ici
+        GRADLEW_PATH=$(find temp_extract -name "gradlew" | head -n 1)
+        if [ -n "$GRADLEW_PATH" ]; then
+          DIR_PATH=$(dirname "$GRADLEW_PATH")
+          cp -r "$DIR_PATH"/* .
         fi
         rm -rf temp_extract
         chmod +x gradlew || true
