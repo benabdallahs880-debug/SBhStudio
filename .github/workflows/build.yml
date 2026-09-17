@@ -15,7 +15,14 @@ jobs:
 
     - name: Extract project ZIP
       run: |
-        unzip -o SBhStudio_ready.zip -d .
+        unzip -o SBhStudio_ready.zip -d temp_extract
+        # Déplace tout le contenu du sous-dossier vers la racine si nécessaire
+        if [ -d "temp_extract/SBhStudio_ready" ]; then
+          mv temp_extract/SBhStudio_ready/* .
+        else
+          mv temp_extract/* .
+        fi
+        rm -rf temp_extract
         chmod +x gradlew || true
 
     - name: Set up JDK 17
