@@ -13,58 +13,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Prepare Android project
-        shell: bash
-        run: |
-          set -e
-
-          echo "=== Contenu du dépôt ==="
-          ls -la
-
-          # Si le projet Gradle est déjà à la racine
-          if [ -f "./gradlew" ]; then
-            echo "Projet Gradle trouvé directement à la racine."
-            chmod +x ./gradlew
-            exit 0
-          fi
-
-          # Sinon, chercher un ZIP contenant le projet
-          ZIP_PATH=$(find . -maxdepth 3 -type f -name "*.zip" | head -n 1)
-
-          if [ -z "$ZIP_PATH" ]; then
-            echo "ERREUR : Aucun projet Gradle et aucun ZIP trouvé."
-            echo "Fichiers disponibles :"
-            find . -maxdepth 3 -type f | sort
-            exit 1
-          fi
-
-          echo "ZIP trouvé : $ZIP_PATH"
-
-          mkdir -p temp_extract
-          unzip -o "$ZIP_PATH" -d temp_extract
-
-          # Chercher gradlew dans le ZIP
-          GRADLEW_PATH=$(find temp_extract -type f -name "gradlew" | head -n 1)
-
-          if [ -z "$GRADLEW_PATH" ]; then
-            echo "ERREUR : gradlew introuvable dans le ZIP."
-            find temp_extract -maxdepth 4 -type f | sort
-            exit 1
-          fi
-
-          PROJECT_DIR=$(dirname "$GRADLEW_PATH")
-
-          echo "Projet trouvé dans : $PROJECT_DIR"
-
-          cp -a "$PROJECT_DIR"/. .
-
-          chmod +x ./gradlew
-
-          rm -rf temp_extract
-
-          echo "=== Projet préparé ==="
-          ls -la
-
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -72,20 +20,17 @@ jobs:
           distribution: "temurin"
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
+        uses: gradle/actions/setup-gradle@v4
 
-      - name: Check Java and Gradle
-        run: |
-          java -version
-          ./gradlew --version
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
 
-      - name: Build APK with Gradle
-        run: |
-          ./gradlew assembleDebug --no-daemon
+      - name: Build APK
+        run: ./gradlew assembleDebug --no-daemon
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug
+          name: SBhStudio-debug
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
