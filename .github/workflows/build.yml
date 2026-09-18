@@ -18,49 +18,66 @@ jobs:
         run: |
           set -e
 
-          echo "=== Contenu du dépôt ==="
-          find . -maxdepth 3 -type f | sort
+          ZIP_PATH="./SBhStudio_v0.7.6_KEY_AND_PACK_FIX.zip"
 
-          # Projet déjà présent à la racine
-          if [ -f "./gradlew" ]; then
-            echo "Projet Gradle trouvé à la racine."
-            chmod +x ./gradlew
-            echo "PROJECT_DIR=." >> "$GITHUB_ENV"
-            exit 0
-          fi
-
-          # Recherche du ZIP
-          ZIP_PATH=$(find . -maxdepth 3 -type f -name "*.zip" | head -n 1)
-
-          if [ -z "$ZIP_PATH" ]; then
-            echo "ERREUR : aucun gradlew et aucun ZIP trouvé."
+          if [ ! -f "$ZIP_PATH" ]; then
+            echo "ERREUR : archive officielle SBh Studio introuvable : $ZIP_PATH"
             exit 1
           fi
 
-          echo "ZIP trouvé : $ZIP_PATH"
+          echo "Archive utilisée : $ZIP_PATH"
 
           rm -rf temp_extract
           mkdir -p temp_extract
 
-          unzip -o "$ZIP_PATH" -d temp_extract
+          unzip -q -o "$ZIP_PATH" -d temp_extract
 
-          echo "=== Contenu extrait ==="
-          find temp_extract -maxdepth 5 -type f | sort
-
-          # Recherche du Gradle Wrapper
           GRADLEW_PATH=$(find temp_extract -type f -name "gradlew" | head -n 1)
 
           if [ -z "$GRADLEW_PATH" ]; then
-            echo "ERREUR : gradlew introuvable dans le ZIP."
-            echo "Vérifie que le ZIP contient bien un projet Android Gradle complet."
+            echo "ERREUR : gradlew introuvable dans l'archive."
             exit 1
           fi
 
           PROJECT_DIR=$(dirname "$GRADLEW_PATH")
 
-          echo "Projet Android trouvé dans : $PROJECT_DIR"
-
           chmod +x "$PROJECT_DIR/gradlew"
+
+          GENERATOR="$PROJECT_DIR/app/src/main/java/com/sbh/studio/generator/PackGenerator.kt"
+
+          if [ ! -f "$GENERATOR" ]; then
+            echo "ERREUR : PackGenerator.kt introuvable."
+            exit 1
+          fi
+
+          echo "=== Vérification PackGenerator ==="
+
+          grep -q "fun textureKey" "$GENERATOR" || {
+            echo "ERREUR : textureKey manquant"
+            exit 1
+          }
+
+          grep -q "fun safe" "$GENERATOR" || {
+            echo "ERREUR : safe manquant"
+            exit 1
+          }
+
+          grep -q "fun splitId" "$GENERATOR" || {
+            echo "ERREUR : splitId manquant"
+            exit 1
+          }
+
+          grep -q "fun blockJson" "$GENERATOR" || {
+            echo "ERREUR : blockJson manquant"
+            exit 1
+          }
+
+          grep -q "MAX_TEXTURE" "$GENERATOR" || {
+            echo "ERREUR : MAX_TEXTURE manquant"
+            exit 1
+          }
+
+          echo "PackGenerator corrigé détecté."
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
@@ -78,12 +95,9 @@ jobs:
         run: |
           set -e
 
-          echo "Projet utilisé : $PROJECT_DIR"
-
           cd "$PROJECT_DIR"
 
-          echo "=== Projet ==="
-          ls -la
+          echo "Projet utilisé : $PROJECT_DIR"
 
           echo "=== Gradle ==="
           ./gradlew --version
@@ -111,4 +125,4 @@ jobs:
         with:
           name: SBhStudio-debug
           path: '**/build/outputs/apk/debug/*.apk'
-          if-no-files-found: error 
+          if-no-files-found: error
