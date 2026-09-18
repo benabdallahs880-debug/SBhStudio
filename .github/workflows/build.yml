@@ -111,4 +111,4 @@ jobs:
         with:
           name: SBhStudio-debug
           path: '**/build/outputs/apk/debug/*.apk'
-          if-no-files-found: error
+          if-no-files-found: error 
