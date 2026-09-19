@@ -18,10 +18,12 @@ jobs:
         run: |
           set -e
 
-          ZIP_PATH="./SBhStudio_v0.7.8_atelier_portails.zip"
+          ZIP_PATH="./SBhStudio_v0.8.4_portal_map_connected.zip"
 
           if [ ! -f "$ZIP_PATH" ]; then
-            echo "ERREUR : archive officielle SBh Studio introuvable : $ZIP_PATH"
+            echo "ERREUR : archive SBh Studio V0.8.4 introuvable : $ZIP_PATH"
+            echo "=== Archives disponibles ==="
+            find . -maxdepth 2 -type f -name "*.zip" -print
             exit 1
           fi
 
@@ -42,6 +44,8 @@ jobs:
           PROJECT_DIR=$(dirname "$GRADLEW_PATH")
 
           chmod +x "$PROJECT_DIR/gradlew"
+
+          echo "Projet Android trouvé : $PROJECT_DIR"
 
           GENERATOR="$PROJECT_DIR/app/src/main/java/com/sbh/studio/generator/PackGenerator.kt"
 
@@ -79,6 +83,46 @@ jobs:
 
           echo "PackGenerator corrigé détecté."
 
+          echo "=== Vérification Map Studio ==="
+
+          MAP_STUDIO="$PROJECT_DIR/app/src/main/assets/mapstudio.html"
+
+          if [ ! -f "$MAP_STUDIO" ]; then
+            echo "ERREUR : mapstudio.html introuvable."
+            exit 1
+          fi
+
+          grep -q "codePreview" "$MAP_STUDIO" || {
+            echo "ERREUR : aperçu Map Code manquant"
+            exit 1
+          }
+
+          grep -q "btnCodePreview" "$MAP_STUDIO" || {
+            echo "ERREUR : bouton aperçu Map Code manquant"
+            exit 1
+          }
+
+          grep -q "renderCodePreview" "$MAP_STUDIO" || {
+            echo "ERREUR : fonction renderCodePreview manquante"
+            exit 1
+          }
+
+          echo "Map Code + aperçu détectés."
+
+          echo "=== Vérification Portal Studio ==="
+
+          grep -R -q "Portal Code" "$PROJECT_DIR/app/src/main" "$PROJECT_DIR/app/src/main/assets" || {
+            echo "AVERTISSEMENT : texte Portal Code non trouvé."
+          }
+
+          echo "=== Vérification connexion Map ↔ Portail ==="
+
+          grep -R -q "portal.map" "$PROJECT_DIR/app/src/main" "$PROJECT_DIR/app/src/main/assets" || {
+            echo "AVERTISSEMENT : liaison portal.map non détectée."
+          }
+
+          echo "=== Projet SBh Studio V0.8.4 prêt ==="
+
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       - name: Set up JDK 17
@@ -109,7 +153,8 @@ jobs:
 
           cd "$PROJECT_DIR"
 
-          echo "=== Compilation SBh Studio ==="
+          echo "=== Compilation SBh Studio V0.8.4 ==="
+
           ./gradlew assembleDebug --no-daemon
 
       - name: Locate APK
@@ -118,11 +163,15 @@ jobs:
           set -e
 
           echo "=== APK générés ==="
-          find "$PROJECT_DIR" -type f -name "*.apk" -print
+
+          find "$PROJECT_DIR" \
+            -type f \
+            -name "*.apk" \
+            -print
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: SBhStudio-debug
+          name: SBhStudio-V0.8.4-debug
           path: '**/build/outputs/apk/debug/*.apk'
           if-no-files-found: error
