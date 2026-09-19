@@ -22,19 +22,34 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y unzip wget
 
+      - name: Vérifier le ZIP SBH
+        run: |
+          echo "===== FICHIERS DISPONIBLES ====="
+          ls -lah
+
+          if [ ! -f "SBH_World_Prototype_Etape2_fixed_repaired.zip" ]; then
+            echo "ERREUR : SBH_World_Prototype_Etape2_fixed_repaired.zip introuvable."
+            echo "Le ZIP corrigé doit être présent à la racine du dépôt."
+            exit 1
+          fi
+
       - name: Extraire SBH World
         run: |
+          rm -rf sbh_world
           mkdir -p sbh_world
-          unzip -o SBH_World_Prototype_Etape2_fixed_repaired.zip -d sbh_world
+
+          unzip -o \
+            "SBH_World_Prototype_Etape2_fixed_repaired.zip" \
+            -d sbh_world
 
       - name: Trouver project.godot
         run: |
-          echo "Recherche de project.godot..."
-          find sbh_world -name "project.godot" -print
+          echo "===== RECHERCHE DU PROJET GODOT ====="
 
-      - name: Détecter le dossier du projet
-        run: |
-          PROJECT_FILE=$(find sbh_world -name "project.godot" -print -quit)
+          PROJECT_FILE=$(find sbh_world \
+            -name "project.godot" \
+            -type f \
+            -print -quit)
 
           if [ -z "$PROJECT_FILE" ]; then
             echo "ERREUR : project.godot introuvable."
@@ -46,27 +61,66 @@ jobs:
           echo "Projet trouvé : $PROJECT_DIR"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: Installer Godot
+      - name: Vérifier la structure du projet
         run: |
-          wget -q https://github.com/godotengine/godot/releases/download/4.5-stable/Godot_v4.5-stable_linux.x86_64.zip
-          unzip -q Godot_v4.5-stable_linux.x86_64.zip
-          sudo mv Godot_v4.5-stable_linux.x86_64 /usr/local/bin/godot
+          echo "===== STRUCTURE SBH WORLD ====="
+          find "$PROJECT_DIR" -maxdepth 3 -type f | sort
+
+      - name: Installer Godot 4.5
+        run: |
+          wget -q \
+            "https://github.com/godotengine/godot/releases/download/4.5-stable/Godot_v4.5-stable_linux.x86_64.zip" \
+            -O godot.zip
+
+          unzip -q godot.zip
+
+          sudo mv \
+            Godot_v4.5-stable_linux.x86_64 \
+            /usr/local/bin/godot
+
           sudo chmod +x /usr/local/bin/godot
 
       - name: Vérifier Godot
         run: |
           godot --version
 
-      - name: Vérifier le projet
+      - name: Installer les templates Godot 4.5
         run: |
-          godot --headless --path "$PROJECT_DIR" --editor --quit
+          echo "===== INSTALLATION DES EXPORT TEMPLATES ====="
 
-      - name: Afficher les fichiers du projet
+          wget -q \
+            "https://github.com/godotengine/godot/releases/download/4.5-stable/Godot_v4.5-stable_export_templates.tpz" \
+            -O export_templates.tpz
+
+          rm -rf templates
+          mkdir -p templates
+
+          unzip -q export_templates.tpz -d templates
+
+          mkdir -p \
+            "$HOME/.local/share/godot/export_templates/4.5.stable"
+
+          cp -r \
+            templates/templates/. \
+            "$HOME/.local/share/godot/export_templates/4.5.stable/"
+
+      - name: Vérifier les templates Android
         run: |
-          echo "===== PROJET SBH WORLD ====="
-          find "$PROJECT_DIR" -maxdepth 3 -type f | sort
+          echo "===== TEMPLATES GODOT ====="
 
-      - name: Vérifier les presets Android
+          ls -lah \
+            "$HOME/.local/share/godot/export_templates/4.5.stable/"
+
+          if [ ! -f \
+            "$HOME/.local/share/godot/export_templates/4.5.stable/android_debug.apk" \
+          ]; then
+            echo "ERREUR : template Android debug introuvable."
+            exit 1
+          fi
+
+          echo "Template Android debug trouvé."
+
+      - name: Vérifier export_presets.cfg
         run: |
           if [ ! -f "$PROJECT_DIR/export_presets.cfg" ]; then
             echo "ERREUR : export_presets.cfg introuvable."
@@ -76,25 +130,44 @@ jobs:
           echo "===== EXPORT PRESETS ====="
           cat "$PROJECT_DIR/export_presets.cfg"
 
-      - name: Préparer le dossier de build
+      - name: Vérifier le projet Godot
         run: |
+          echo "===== INITIALISATION GODOT ====="
+
+          godot \
+            --headless \
+            --path "$PROJECT_DIR" \
+            --editor \
+            --quit
+
+      - name: Préparer le dossier APK
+        run: |
+          rm -rf "$PROJECT_DIR/build"
           mkdir -p "$PROJECT_DIR/build"
 
-      - name: Exporter APK Android
+      - name: Exporter SBH World Android
         run: |
-          godot --headless \
+          echo "===== EXPORT APK ====="
+
+          godot \
+            --headless \
             --path "$PROJECT_DIR" \
-            --export-debug "Android" \
+            --export-debug \
+            "Android" \
             "$PROJECT_DIR/build/SBH-World.apk"
 
       - name: Vérifier l'APK
         run: |
+          echo "===== VERIFICATION APK ====="
+
           if [ ! -f "$PROJECT_DIR/build/SBH-World.apk" ]; then
             echo "ERREUR : APK non généré."
             exit 1
           fi
 
           ls -lh "$PROJECT_DIR/build/SBH-World.apk"
+
+          echo "APK SBH World généré avec succès."
 
       - name: Publier l'APK
         uses: actions/upload-artifact@v4
