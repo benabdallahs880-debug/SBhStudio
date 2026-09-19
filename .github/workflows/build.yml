@@ -7,14 +7,99 @@ on:
   pull_request:
     branches:
       - main
+  workflow_dispatch:
 
 jobs:
-  test:
+  build-android:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Test workflow
-        run: echo "SBH World GitHub Actions fonctionne !"
+      - name: Installer les outils
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y unzip wget
+
+      - name: Extraire SBH World
+        run: |
+          mkdir -p sbh_world
+          unzip -o SBH_World_Prototype_Etape2_fixed.zip -d sbh_world
+
+      - name: Trouver project.godot
+        run: |
+          echo "Recherche de project.godot..."
+          find sbh_world -name "project.godot" -print
+
+      - name: Détecter le dossier du projet
+        run: |
+          PROJECT_FILE=$(find sbh_world -name "project.godot" -print -quit)
+
+          if [ -z "$PROJECT_FILE" ]; then
+            echo "ERREUR : project.godot introuvable."
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$PROJECT_FILE")
+
+          echo "Projet trouvé : $PROJECT_DIR"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Installer Godot
+        run: |
+          wget -q https://github.com/godotengine/godot/releases/download/4.5-stable/Godot_v4.5-stable_linux.x86_64.zip
+          unzip -q Godot_v4.5-stable_linux.x86_64.zip
+          sudo mv Godot_v4.5-stable_linux.x86_64 /usr/local/bin/godot
+          sudo chmod +x /usr/local/bin/godot
+
+      - name: Vérifier Godot
+        run: |
+          godot --version
+
+      - name: Vérifier le projet
+        run: |
+          godot --headless --path "$PROJECT_DIR" --editor --quit
+
+      - name: Afficher les fichiers du projet
+        run: |
+          echo "===== PROJET SBH WORLD ====="
+          find "$PROJECT_DIR" -maxdepth 3 -type f | sort
+
+      - name: Vérifier les presets Android
+        run: |
+          if [ ! -f "$PROJECT_DIR/export_presets.cfg" ]; then
+            echo "ERREUR : export_presets.cfg introuvable."
+            exit 1
+          fi
+
+          echo "===== EXPORT PRESETS ====="
+          cat "$PROJECT_DIR/export_presets.cfg"
+
+      - name: Préparer le dossier de build
+        run: |
+          mkdir -p "$PROJECT_DIR/build"
+
+      - name: Exporter APK Android
+        run: |
+          godot --headless \
+            --path "$PROJECT_DIR" \
+            --export-debug "Android" \
+            "$PROJECT_DIR/build/SBH-World.apk"
+
+      - name: Vérifier l'APK
+        run: |
+          if [ ! -f "$PROJECT_DIR/build/SBH-World.apk" ]; then
+            echo "ERREUR : APK non généré."
+            exit 1
+          fi
+
+          ls -lh "$PROJECT_DIR/build/SBH-World.apk"
+
+      - name: Publier l'APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: SBH-World-APK
+          path: ${{ env.PROJECT_DIR }}/build/SBH-World.apk
+          if-no-files-found: error
+          retention-days: 7
