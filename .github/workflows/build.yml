@@ -20,20 +20,19 @@ jobs:
       - name: Installer les outils
         run: |
           sudo apt-get update
-          sudo apt-get install -y unzip wget
+          sudo apt-get install -y unzip wget openjdk-17-jdk
 
-      - name: Vérifier le ZIP SBH
+      - name: Vérifier les fichiers du dépôt
         run: |
-          echo "===== FICHIERS DISPONIBLES ====="
+          echo "===== RACINE DU DEPOT ====="
           ls -lah
 
           if [ ! -f "SBH_World_Prototype_Etape2_fixed_repaired.zip" ]; then
             echo "ERREUR : SBH_World_Prototype_Etape2_fixed_repaired.zip introuvable."
-            echo "Le ZIP corrigé doit être présent à la racine du dépôt."
             exit 1
           fi
 
-      - name: Extraire SBH World
+      - name: Extraire le projet SBH
         run: |
           rm -rf sbh_world
           mkdir -p sbh_world
@@ -44,8 +43,6 @@ jobs:
 
       - name: Trouver project.godot
         run: |
-          echo "===== RECHERCHE DU PROJET GODOT ====="
-
           PROJECT_FILE=$(find sbh_world \
             -name "project.godot" \
             -type f \
@@ -61,7 +58,7 @@ jobs:
           echo "Projet trouvé : $PROJECT_DIR"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: Vérifier la structure du projet
+      - name: Afficher la structure du projet
         run: |
           echo "===== STRUCTURE SBH WORLD ====="
           find "$PROJECT_DIR" -maxdepth 3 -type f | sort
@@ -82,11 +79,12 @@ jobs:
 
       - name: Vérifier Godot
         run: |
+          echo "===== GODOT ====="
           godot --version
 
       - name: Installer les templates Godot 4.5
         run: |
-          echo "===== INSTALLATION DES EXPORT TEMPLATES ====="
+          echo "===== EXPORT TEMPLATES ====="
 
           wget -q \
             "https://github.com/godotengine/godot/releases/download/4.5-stable/Godot_v4.5-stable_export_templates.tpz" \
@@ -104,9 +102,11 @@ jobs:
             templates/templates/. \
             "$HOME/.local/share/godot/export_templates/4.5.stable/"
 
+          echo "Templates installés."
+
       - name: Vérifier les templates Android
         run: |
-          echo "===== TEMPLATES GODOT ====="
+          echo "===== VERIFICATION TEMPLATES ====="
 
           ls -lah \
             "$HOME/.local/share/godot/export_templates/4.5.stable/"
@@ -114,23 +114,31 @@ jobs:
           if [ ! -f \
             "$HOME/.local/share/godot/export_templates/4.5.stable/android_debug.apk" \
           ]; then
-            echo "ERREUR : template Android debug introuvable."
+            echo "ERREUR : android_debug.apk introuvable."
             exit 1
           fi
 
-          echo "Template Android debug trouvé."
+          if [ ! -f \
+            "$HOME/.local/share/godot/export_templates/4.5.stable/android_release.apk" \
+          ]; then
+            echo "ERREUR : android_release.apk introuvable."
+            exit 1
+          fi
+
+          echo "Templates Android OK."
 
       - name: Vérifier export_presets.cfg
         run: |
+          echo "===== EXPORT PRESETS ====="
+
           if [ ! -f "$PROJECT_DIR/export_presets.cfg" ]; then
             echo "ERREUR : export_presets.cfg introuvable."
             exit 1
           fi
 
-          echo "===== EXPORT PRESETS ====="
           cat "$PROJECT_DIR/export_presets.cfg"
 
-      - name: Vérifier le projet Godot
+      - name: Diagnostic Godot du projet
         run: |
           echo "===== INITIALISATION GODOT ====="
 
@@ -140,21 +148,59 @@ jobs:
             --editor \
             --quit
 
-      - name: Préparer le dossier APK
+      - name: Vérifier la configuration Android
+        run: |
+          echo "===== DIAGNOSTIC ANDROID ====="
+
+          echo "Java :"
+          java -version
+
+          echo
+          echo "JAVA_HOME :"
+          echo "${JAVA_HOME:-non défini}"
+
+          echo
+          echo "Godot :"
+          godot --version
+
+          echo
+          echo "Preset Android détecté dans export_presets.cfg :"
+
+          grep -n \
+            -A 80 \
+            'name="Android"' \
+            "$PROJECT_DIR/export_presets.cfg" || true
+
+      - name: Préparer le dossier de build
         run: |
           rm -rf "$PROJECT_DIR/build"
           mkdir -p "$PROJECT_DIR/build"
 
-      - name: Exporter SBH World Android
+      - name: Export APK Android avec diagnostic
         run: |
           echo "===== EXPORT APK ====="
 
+          set -o pipefail
+
           godot \
             --headless \
+            --verbose \
             --path "$PROJECT_DIR" \
             --export-debug \
             "Android" \
-            "$PROJECT_DIR/build/SBH-World.apk"
+            "$PROJECT_DIR/build/SBH-World.apk" \
+            2>&1 | tee android-export.log
+
+      - name: Afficher le diagnostic en cas d'échec
+        if: failure()
+        run: |
+          echo "===== DIAGNOSTIC EXPORT ANDROID ====="
+
+          if [ -f android-export.log ]; then
+            cat android-export.log
+          else
+            echo "Aucun journal android-export.log disponible."
+          fi
 
       - name: Vérifier l'APK
         run: |
