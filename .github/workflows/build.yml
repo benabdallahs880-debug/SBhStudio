@@ -13,18 +13,51 @@ jobs:
   build-android:
     runs-on: ubuntu-latest
 
+    env:
+      ANDROID_HOME: ${{ github.workspace }}/android-sdk
+      ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
+      JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+
     steps:
+
+      # ============================================================
+      # 1. RECUPERATION DU DEPOT
+      # ============================================================
+
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Installer les outils
+
+      # ============================================================
+      # 2. OUTILS DE BASE
+      # ============================================================
+
+      - name: Installer les outils de base
         run: |
+          echo "===== INSTALLATION OUTILS ====="
+
           sudo apt-get update
-          sudo apt-get install -y unzip wget openjdk-17-jdk
+
+          sudo apt-get install -y \
+            unzip \
+            wget \
+            openjdk-17-jdk
+
+          echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> "$GITHUB_ENV"
+
+          echo "/usr/lib/jvm/java-17-openjdk-amd64/bin" >> "$GITHUB_PATH"
+
+          java -version
+
+
+      # ============================================================
+      # 3. VERIFIER LE ZIP SBH
+      # ============================================================
 
       - name: Vérifier les fichiers du dépôt
         run: |
           echo "===== RACINE DU DEPOT ====="
+
           ls -lah
 
           if [ ! -f "SBH_World_Prototype_Etape2_fixed_repaired.zip" ]; then
@@ -32,17 +65,36 @@ jobs:
             exit 1
           fi
 
+          echo "ZIP SBH trouvé."
+
+
+      # ============================================================
+      # 4. EXTRAIRE LE PROJET
+      # ============================================================
+
       - name: Extraire le projet SBH
         run: |
+          echo "===== EXTRACTION PROJET ====="
+
           rm -rf sbh_world
+
           mkdir -p sbh_world
 
           unzip -o \
             "SBH_World_Prototype_Etape2_fixed_repaired.zip" \
             -d sbh_world
 
+          echo "Projet extrait."
+
+
+      # ============================================================
+      # 5. TROUVER PROJECT.GODOT
+      # ============================================================
+
       - name: Trouver project.godot
         run: |
+          echo "===== RECHERCHE PROJECT.GODOT ====="
+
           PROJECT_FILE=$(find sbh_world \
             -name "project.godot" \
             -type f \
@@ -56,31 +108,197 @@ jobs:
           PROJECT_DIR=$(dirname "$PROJECT_FILE")
 
           echo "Projet trouvé : $PROJECT_DIR"
+
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+
+      # ============================================================
+      # 6. AFFICHER LA STRUCTURE
+      # ============================================================
 
       - name: Afficher la structure du projet
         run: |
           echo "===== STRUCTURE SBH WORLD ====="
-          find "$PROJECT_DIR" -maxdepth 3 -type f | sort
+
+          find "$PROJECT_DIR" \
+            -maxdepth 4 \
+            -type f \
+            | sort
+
+
+      # ============================================================
+      # 7. INSTALLER SDK ANDROID
+      # ============================================================
+
+      - name: Installer le SDK Android pour Godot 4.5
+        run: |
+          echo "===== INSTALLATION SDK ANDROID ====="
+
+          rm -rf "$ANDROID_HOME"
+
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
+
+          wget -q \
+            "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip" \
+            -O android-cmdline-tools.zip
+
+          unzip -q \
+            android-cmdline-tools.zip \
+            -d "$ANDROID_HOME/cmdline-tools"
+
+          mv \
+            "$ANDROID_HOME/cmdline-tools/cmdline-tools" \
+            "$ANDROID_HOME/cmdline-tools/latest"
+
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+
+          chmod +x "$SDKMANAGER"
+
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+
+          echo "===== ACCEPTATION DES LICENCES ====="
+
+          yes | "$SDKMANAGER" \
+            --sdk_root="$ANDROID_HOME" \
+            --licenses \
+            >/dev/null || true
+
+          echo "===== INSTALLATION DES COMPOSANTS ====="
+
+          "$SDKMANAGER" \
+            --sdk_root="$ANDROID_HOME" \
+            "platform-tools" \
+            "build-tools;35.0.0" \
+            "platforms;android-35" \
+            "cmdline-tools;latest" \
+            "cmake;3.10.2.4988404" \
+            "ndk;28.1.13356709"
+
+          echo "SDK Android installé."
+
+
+      # ============================================================
+      # 8. VERIFIER SDK ANDROID
+      # ============================================================
+
+      - name: Vérifier le SDK Android
+        run: |
+          echo "===== VERIFICATION SDK ANDROID ====="
+
+          echo "ANDROID_HOME=$ANDROID_HOME"
+
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+
+          echo "JAVA_HOME=$JAVA_HOME"
+
+          echo
+          echo "===== ADB ====="
+
+          if [ ! -x "$ANDROID_HOME/platform-tools/adb" ]; then
+            echo "ERREUR : adb introuvable."
+            exit 1
+          fi
+
+          adb version
+
+          echo
+          echo "===== SDKMANAGER ====="
+
+          if [ ! -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
+            echo "ERREUR : sdkmanager introuvable."
+            exit 1
+          fi
+
+          echo
+          echo "===== PLATFORM 35 ====="
+
+          if [ ! -d "$ANDROID_HOME/platforms/android-35" ]; then
+            echo "ERREUR : Android Platform 35 introuvable."
+            exit 1
+          fi
+
+          echo
+          echo "===== BUILD TOOLS ====="
+
+          if [ ! -d "$ANDROID_HOME/build-tools/35.0.0" ]; then
+            echo "ERREUR : Build Tools 35.0.0 introuvables."
+            exit 1
+          fi
+
+          echo
+          echo "===== NDK ====="
+
+          if [ ! -d "$ANDROID_HOME/ndk/28.1.13356709" ]; then
+            echo "ERREUR : NDK 28.1.13356709 introuvable."
+            exit 1
+          fi
+
+          echo
+          echo "===== CMAKE ====="
+
+          if [ ! -d "$ANDROID_HOME/cmake/3.10.2.4988404" ]; then
+            echo "ERREUR : CMake 3.10.2.4988404 introuvable."
+            exit 1
+          fi
+
+          echo
+          echo "SDK Android complètement configuré."
+
+
+      # ============================================================
+      # 9. DEMARRER ADB
+      # ============================================================
+
+      - name: Démarrer ADB
+        run: |
+          echo "===== ADB SERVER ====="
+
+          adb start-server || true
+
+          adb devices || true
+
+
+      # ============================================================
+      # 10. INSTALLER GODOT 4.5
+      # ============================================================
 
       - name: Installer Godot 4.5
         run: |
+          echo "===== INSTALLATION GODOT 4.5 ====="
+
           wget -q \
             "https://github.com/godotengine/godot/releases/download/4.5-stable/Godot_v4.5-stable_linux.x86_64.zip" \
             -O godot.zip
 
-          unzip -q godot.zip
+          unzip -q \
+            godot.zip
 
           sudo mv \
             Godot_v4.5-stable_linux.x86_64 \
             /usr/local/bin/godot
 
-          sudo chmod +x /usr/local/bin/godot
+          sudo chmod +x \
+            /usr/local/bin/godot
+
+          echo "Godot installé."
+
+
+      # ============================================================
+      # 11. VERIFIER GODOT
+      # ============================================================
 
       - name: Vérifier Godot
         run: |
           echo "===== GODOT ====="
+
           godot --version
+
+
+      # ============================================================
+      # 12. INSTALLER LES EXPORT TEMPLATES
+      # ============================================================
 
       - name: Installer les templates Godot 4.5
         run: |
@@ -91,9 +309,12 @@ jobs:
             -O export_templates.tpz
 
           rm -rf templates
+
           mkdir -p templates
 
-          unzip -q export_templates.tpz -d templates
+          unzip -q \
+            export_templates.tpz \
+            -d templates
 
           mkdir -p \
             "$HOME/.local/share/godot/export_templates/4.5.stable"
@@ -104,28 +325,39 @@ jobs:
 
           echo "Templates installés."
 
+
+      # ============================================================
+      # 13. VERIFIER LES TEMPLATES
+      # ============================================================
+
       - name: Vérifier les templates Android
         run: |
           echo "===== VERIFICATION TEMPLATES ====="
 
-          ls -lah \
-            "$HOME/.local/share/godot/export_templates/4.5.stable/"
+          TEMPLATE_DIR="$HOME/.local/share/godot/export_templates/4.5.stable"
 
-          if [ ! -f \
-            "$HOME/.local/share/godot/export_templates/4.5.stable/android_debug.apk" \
-          ]; then
+          ls -lah "$TEMPLATE_DIR"
+
+          if [ ! -f "$TEMPLATE_DIR/android_debug.apk" ]; then
             echo "ERREUR : android_debug.apk introuvable."
             exit 1
           fi
 
-          if [ ! -f \
-            "$HOME/.local/share/godot/export_templates/4.5.stable/android_release.apk" \
-          ]; then
+          if [ ! -f "$TEMPLATE_DIR/android_release.apk" ]; then
             echo "ERREUR : android_release.apk introuvable."
             exit 1
           fi
 
+          if [ ! -f "$TEMPLATE_DIR/android_source.zip" ]; then
+            echo "AVERTISSEMENT : android_source.zip introuvable."
+          fi
+
           echo "Templates Android OK."
+
+
+      # ============================================================
+      # 14. VERIFIER EXPORT_PRESETS
+      # ============================================================
 
       - name: Vérifier export_presets.cfg
         run: |
@@ -138,6 +370,11 @@ jobs:
 
           cat "$PROJECT_DIR/export_presets.cfg"
 
+
+      # ============================================================
+      # 15. INITIALISER GODOT
+      # ============================================================
+
       - name: Diagnostic Godot du projet
         run: |
           echo "===== INITIALISATION GODOT ====="
@@ -148,37 +385,83 @@ jobs:
             --editor \
             --quit
 
+
+      # ============================================================
+      # 16. DIAGNOSTIC ANDROID
+      # ============================================================
+
       - name: Vérifier la configuration Android
         run: |
           echo "===== DIAGNOSTIC ANDROID ====="
 
+          echo
           echo "Java :"
+
           java -version
 
           echo
           echo "JAVA_HOME :"
-          echo "${JAVA_HOME:-non défini}"
+
+          echo "$JAVA_HOME"
+
+          echo
+          echo "ANDROID_HOME :"
+
+          echo "$ANDROID_HOME"
+
+          echo
+          echo "ANDROID_SDK_ROOT :"
+
+          echo "$ANDROID_SDK_ROOT"
 
           echo
           echo "Godot :"
+
           godot --version
 
           echo
-          echo "Preset Android détecté dans export_presets.cfg :"
+          echo "ADB :"
+
+          adb version
+
+          echo
+          echo "SDK Android :"
+
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            --sdk_root="$ANDROID_HOME" \
+            --list_installed \
+            || true
+
+          echo
+          echo "Preset Android détecté :"
 
           grep -n \
-            -A 80 \
+            -A 100 \
             'name="Android"' \
-            "$PROJECT_DIR/export_presets.cfg" || true
+            "$PROJECT_DIR/export_presets.cfg" \
+            || true
+
+
+      # ============================================================
+      # 17. PREPARER LE BUILD
+      # ============================================================
 
       - name: Préparer le dossier de build
         run: |
+          echo "===== PREPARATION BUILD ====="
+
           rm -rf "$PROJECT_DIR/build"
+
           mkdir -p "$PROJECT_DIR/build"
+
+
+      # ============================================================
+      # 18. EXPORT APK
+      # ============================================================
 
       - name: Export APK Android avec diagnostic
         run: |
-          echo "===== EXPORT APK ====="
+          echo "===== EXPORT APK ANDROID ====="
 
           set -o pipefail
 
@@ -191,6 +474,11 @@ jobs:
             "$PROJECT_DIR/build/SBH-World.apk" \
             2>&1 | tee android-export.log
 
+
+      # ============================================================
+      # 19. DIAGNOSTIC SI ECHEC
+      # ============================================================
+
       - name: Afficher le diagnostic en cas d'échec
         if: failure()
         run: |
@@ -202,6 +490,29 @@ jobs:
             echo "Aucun journal android-export.log disponible."
           fi
 
+          echo
+          echo "===== ENVIRONNEMENT ====="
+
+          echo "JAVA_HOME=$JAVA_HOME"
+
+          echo "ANDROID_HOME=$ANDROID_HOME"
+
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+
+          echo
+          echo "===== DOSSIER BUILD ====="
+
+          find "$PROJECT_DIR/build" \
+            -maxdepth 2 \
+            -type f \
+            -ls \
+            || true
+
+
+      # ============================================================
+      # 20. VERIFIER APK
+      # ============================================================
+
       - name: Vérifier l'APK
         run: |
           echo "===== VERIFICATION APK ====="
@@ -211,14 +522,28 @@ jobs:
             exit 1
           fi
 
-          ls -lh "$PROJECT_DIR/build/SBH-World.apk"
+          echo
+          echo "APK trouvé :"
 
+          ls -lh \
+            "$PROJECT_DIR/build/SBH-World.apk"
+
+          echo
           echo "APK SBH World généré avec succès."
+
+
+      # ============================================================
+      # 21. PUBLIER APK
+      # ============================================================
 
       - name: Publier l'APK
         uses: actions/upload-artifact@v4
+
         with:
           name: SBH-World-APK
+
           path: ${{ env.PROJECT_DIR }}/build/SBH-World.apk
+
           if-no-files-found: error
+
           retention-days: 7
