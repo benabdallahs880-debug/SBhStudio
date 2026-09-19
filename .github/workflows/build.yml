@@ -1,26 +1,20 @@
-SBH World
-│
-├── 1. Développement local
-│      ↓
-├── 2. Vérification du code
-│      ├── erreurs GDScript
-│      ├── fichiers manquants
-│      └── structure Godot
-│
-├── 3. Commit
-│      ↓
-├── 4. Push → GitHub
-│      ↓
-├── 5. GitHub Actions
-│      ├── checkout
-│      ├── vérification du projet
-│      ├── import Godot
-│      ├── tests
-│      └── build Android
-│
-├── 6. APK généré comme Artifact
-│      ↓
-└── 7. Test sur téléphone
-       ↓
-       ├── OK → prochaine évolution
-       └── BUG → correction → nouveau commit
+name: SBH World
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Test workflow
+        run: echo "SBH World GitHub Actions fonctionne !"
