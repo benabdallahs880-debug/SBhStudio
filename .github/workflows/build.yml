@@ -18,7 +18,7 @@ jobs:
         run: |
           set -e
 
-          ZIP_PATH="./SBhStudio_v0.7.6_KEY_AND_PACK_FIX.zip"
+          ZIP_PATH="./SBhStudio_v0.7.6_FINAL_BUILD_FIX.zip"
 
           if [ ! -f "$ZIP_PATH" ]; then
             echo "ERREUR : archive officielle SBh Studio introuvable : $ZIP_PATH"
