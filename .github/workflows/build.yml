@@ -25,7 +25,7 @@ jobs:
       - name: Extraire SBH World
         run: |
           mkdir -p sbh_world
-          unzip -o SBH_World_Prototype_Etape2_fixed.zip -d sbh_world
+          unzip -o SBH_World_Prototype_Etape2_fixed_repaired.zip -d sbh_world
 
       - name: Trouver project.godot
         run: |
