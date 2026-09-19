@@ -1,98 +1,10 @@
-name: Build APK
+echo "=== Vérification Factions ==="
 
-on:
-  push:
-    branches: ["main"]
-  workflow_dispatch:
+FACTIONS_JSON="$PROJECT_DIR/app/src/main/assets/agw/factions.json"
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
+if [ ! -f "$FACTIONS_JSON" ]; then
+  echo "ERREUR : factions.json introuvable."
+  exit 1
+fi
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Prepare Android project
-        shell: bash
-        run: |
-          set -e
-
-          ZIP_PATH="./SBhStudio_v0.9.0_factions_home.zip"
-
-          if [ ! -f "$ZIP_PATH" ]; then
-            echo "ERREUR : archive SBh Studio V0.9.0 introuvable : $ZIP_PATH"
-            echo "=== Archives disponibles ==="
-            find . -maxdepth 2 -type f -name "*.zip" -print
-            exit 1
-          fi
-
-          echo "Archive utilisée : $ZIP_PATH"
-
-          rm -rf temp_extract
-          mkdir -p temp_extract
-
-          unzip -q -o "$ZIP_PATH" -d temp_extract
-
-          GRADLEW_PATH=$(find temp_extract -type f -name "gradlew" | head -n 1)
-
-          if [ -z "$GRADLEW_PATH" ]; then
-            echo "ERREUR : gradlew introuvable dans l'archive."
-            exit 1
-          fi
-
-          PROJECT_DIR=$(dirname "$GRADLEW_PATH")
-
-          chmod +x "$PROJECT_DIR/gradlew"
-
-          echo "Projet Android trouvé : $PROJECT_DIR"
-
-          GENERATOR="$PROJECT_DIR/app/src/main/java/com/sbh/studio/generator/PackGenerator.kt"
-
-          if [ ! -f "$GENERATOR" ]; then
-            echo "ERREUR : PackGenerator.kt introuvable."
-            exit 1
-          fi
-
-          echo "=== Vérification PackGenerator ==="
-
-          grep -q "fun textureKey" "$GENERATOR" || {
-            echo "ERREUR : textureKey manquant"
-            exit 1
-          }
-
-          grep -q "fun safe" "$GENERATOR" || {
-            echo "ERREUR : safe manquant"
-            exit 1
-          }
-
-          grep -q "fun splitId" "$GENERATOR" || {
-            echo "ERREUR : splitId manquant"
-            exit 1
-          }
-
-          grep -q "fun blockJson" "$GENERATOR" || {
-            echo "ERREUR : blockJson manquant"
-            exit 1
-          }
-
-          grep -q "MAX_TEXTURE" "$GENERATOR" || {
-            echo "ERREUR : MAX_TEXTURE manquant"
-            exit 1
-          }
-
-          echo "PackGenerator corrigé détecté."
-
-          echo "=== Vérification Factions ==="
-
-          FACTIONS_JSON="$PROJECT_DIR/app/src/main/assets/agw/factions.json"
-
-          if [ ! -f "$FACTIONS_JSON" ]; then
-            echo "ERREUR : factions.json introuvable."
-            exit 1
-          fi
-
-          echo "factions.json détecté."
-
-          grep -q "Hibou" "$FACTIONS_JSON" || {
-            echo "ERREUR : faction
+echo "factions.json détecté."
