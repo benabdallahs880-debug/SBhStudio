@@ -27,29 +27,46 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Localiser la racine Gradle (studio)
+      - name: Extraire les sources
         id: root
         run: |
           set -euo pipefail
-          # 1) déjà à la racine
+
+          # Cas 1 : sources déjà à la racine
           if [ -f gradlew ] && [ -f settings.gradle.kts ]; then
             echo "project_root=." >> "$GITHUB_OUTPUT"
-            echo "Racine Gradle: ."
+            echo "Sources déjà à la racine."
             exit 0
           fi
-          # 2) chercher gradlew dans le dépôt
-          FOUND=$(find . -name gradlew -type f 2>/dev/null | head -1 || true)
-          if [ -z "$FOUND" ]; then
-            echo "::error::gradlew introuvable dans le dépôt."
-            echo "Contenu de la racine:"
-            ls -la
-            echo "Arborescence (3 niveaux):"
-            find . -maxdepth 3 -type f -name "*.kts" -o -name "gradlew" -o -name "version.json" 2>/dev/null | head -50
-            exit 1
+
+          # Cas 2 : un ZIP du projet est présent
+          ZIP=$(find . -maxdepth 2 -type f \( -name 'SBhStudio*.zip' -o -name '*studio*.zip' -o -name '*settlement*.zip' \) | head -1 || true)
+          if [ -n "$ZIP" ]; then
+            echo "Extraction de $ZIP ..."
+            mkdir -p _src
+            unzip -q -o "$ZIP" -d _src
+            FOUND=$(find _src -name gradlew -type f | head -1 || true)
+            if [ -z "$FOUND" ]; then
+              echo "::error::ZIP extrait mais gradlew absent dedans."
+              find _src -maxdepth 5 -type f | head -80
+              exit 1
+            fi
+            DIR=$(dirname "$FOUND")
+            echo "project_root=$DIR" >> "$GITHUB_OUTPUT"
+            echo "Racine Gradle: $DIR"
+            exit 0
           fi
-          DIR=$(dirname "$FOUND")
-          echo "project_root=$DIR" >> "$GITHUB_OUTPUT"
-          echo "Racine Gradle détectée: $DIR"
+
+          # Cas 3 : chercher gradlew ailleurs
+          FOUND=$(find . -name gradlew -type f | head -1 || true)
+          if [ -n "$FOUND" ]; then
+            echo "project_root=$(dirname "$FOUND")" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "::error::Ni sources ni ZIP trouvés."
+          ls -la
+          exit 1
 
       - name: Vérifier la structure
         working-directory: ${{ steps.root.outputs.project_root }}
@@ -67,7 +84,7 @@ jobs:
             app/src/main/java/com/sbh/studio/mapeditor/MapEditorScreen.kt \
             app/src/main/assets/mapstudio.html
           do
-            test -e "$f" || { echo "MANQUANT (module SBh): $f"; exit 1; }
+            test -e "$f" || { echo "MANQUANT: $f"; exit 1; }
             echo "OK  $f"
           done
           echo "Structure validée."
@@ -132,7 +149,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Localiser la racine Gradle (studio)
+      - name: Extraire les sources
         id: root
         run: |
           set -euo pipefail
@@ -140,8 +157,16 @@ jobs:
             echo "project_root=." >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          FOUND=$(find . -name gradlew -type f 2>/dev/null | head -1 || true)
-          test -n "$FOUND" || { echo "gradlew introuvable"; exit 1; }
+          ZIP=$(find . -maxdepth 2 -type f \( -name 'SBhStudio*.zip' -o -name '*studio*.zip' -o -name '*settlement*.zip' \) | head -1 || true)
+          if [ -n "$ZIP" ]; then
+            mkdir -p _src
+            unzip -q -o "$ZIP" -d _src
+            FOUND=$(find _src -name gradlew -type f | head -1)
+            echo "project_root=$(dirname "$FOUND")" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          FOUND=$(find . -name gradlew -type f | head -1 || true)
+          test -n "$FOUND"
           echo "project_root=$(dirname "$FOUND")" >> "$GITHUB_OUTPUT"
 
       - name: Set up JDK 17
@@ -194,7 +219,7 @@ jobs:
             echo "has_signing=true" >> "$GITHUB_OUTPUT"
           else
             echo "has_signing=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Secrets de signature absents — release signée ignorée."
+            echo "::warning::Secrets absents — pas de release signée."
           fi
 
       - name: Préparer le keystore
