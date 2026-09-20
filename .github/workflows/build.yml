@@ -20,6 +20,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # ═══════════════════════════════════════════════════════════════
+  # 1) Extraire sources + analyser + APK Debug
+  # ═══════════════════════════════════════════════════════════════
   analyze-and-debug:
     name: Analyze + Debug APK
     runs-on: ubuntu-latest
@@ -27,7 +30,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Extraire les sources
+      - name: Extraire / localiser les sources
         id: root
         run: |
           set -euo pipefail
@@ -39,7 +42,7 @@ jobs:
             exit 0
           fi
 
-          # Cas 2 : un ZIP du projet est présent
+          # Cas 2 : ZIP du projet présent (SBhStudio_*.zip)
           ZIP=$(find . -maxdepth 2 -type f \( -name 'SBhStudio*.zip' -o -name '*studio*.zip' -o -name '*settlement*.zip' \) | head -1 || true)
           if [ -n "$ZIP" ]; then
             echo "Extraction de $ZIP ..."
@@ -47,8 +50,8 @@ jobs:
             unzip -q -o "$ZIP" -d _src
             FOUND=$(find _src -name gradlew -type f | head -1 || true)
             if [ -z "$FOUND" ]; then
-              echo "::error::ZIP extrait mais gradlew absent dedans."
-              find _src -maxdepth 5 -type f | head -80
+              echo "::error::ZIP extrait mais gradlew absent."
+              find _src -maxdepth 6 -type f | head -80
               exit 1
             fi
             DIR=$(dirname "$FOUND")
@@ -57,7 +60,7 @@ jobs:
             exit 0
           fi
 
-          # Cas 3 : chercher gradlew ailleurs
+          # Cas 3 : gradlew quelque part dans le repo
           FOUND=$(find . -name gradlew -type f | head -1 || true)
           if [ -n "$FOUND" ]; then
             echo "project_root=$(dirname "$FOUND")" >> "$GITHUB_OUTPUT"
@@ -96,8 +99,27 @@ jobs:
           distribution: "temurin"
           cache: gradle
 
+      # Pas de package "tools" (supprimé par Google)
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: |
+            platform-tools
+            platforms;android-35
+            build-tools;35.0.0
+
+      - name: Accepter les licences SDK
+        run: |
+          set -euo pipefail
+          SDK="\( {ANDROID_SDK_ROOT:- \){ANDROID_HOME:-}}"
+          if [ -z "$SDK" ]; then
+            echo "ANDROID_SDK_ROOT non défini, on continue"
+            exit 0
+          fi
+          mkdir -p "$SDK/licenses"
+          echo -e "24333f8a63b6825ea9c5514f83c2829b004d1fee\n" > "$SDK/licenses/android-sdk-license"
+          echo -e "84831b9409646a918e30573bab4c9c91346d8abd\n" > "$SDK/licenses/android-sdk-preview-license"
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
 
       - name: Sync version.json → Gradle + assets
         working-directory: ${{ steps.root.outputs.project_root }}
@@ -124,6 +146,18 @@ jobs:
           print(f"Synced versionCode={code} versionName={name}")
           PY
 
+      - name: local.properties (sdk.dir)
+        working-directory: ${{ steps.root.outputs.project_root }}
+        run: |
+          set -euo pipefail
+          SDK="\( {ANDROID_SDK_ROOT:- \){ANDROID_HOME:-}}"
+          if [ -n "$SDK" ]; then
+            echo "sdk.dir=$SDK" > local.properties
+            echo "local.properties → sdk.dir=$SDK"
+          else
+            echo "::warning::ANDROID_HOME absent"
+          fi
+
       - name: gradlew exécutable
         working-directory: ${{ steps.root.outputs.project_root }}
         run: chmod +x ./gradlew
@@ -140,6 +174,9 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
+  # ═══════════════════════════════════════════════════════════════
+  # 2) Release signée (si secrets présents)
+  # ═══════════════════════════════════════════════════════════════
   release:
     name: Signed Release APK
     needs: analyze-and-debug
@@ -149,7 +186,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Extraire les sources
+      - name: Extraire / localiser les sources
         id: root
         run: |
           set -euo pipefail
@@ -178,6 +215,21 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: |
+            platform-tools
+            platforms;android-35
+            build-tools;35.0.0
+
+      - name: Accepter les licences SDK
+        run: |
+          set -euo pipefail
+          SDK="\( {ANDROID_SDK_ROOT:- \){ANDROID_HOME:-}}"
+          if [ -z "$SDK" ]; then exit 0; fi
+          mkdir -p "$SDK/licenses"
+          echo -e "24333f8a63b6825ea9c5514f83c2829b004d1fee\n" > "$SDK/licenses/android-sdk-license"
+          echo -e "84831b9409646a918e30573bab4c9c91346d8abd\n" > "$SDK/licenses/android-sdk-preview-license"
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
 
       - name: Sync version.json → Gradle + assets
         working-directory: ${{ steps.root.outputs.project_root }}
@@ -203,6 +255,15 @@ jobs:
           )
           PY
 
+      - name: local.properties (sdk.dir)
+        working-directory: ${{ steps.root.outputs.project_root }}
+        run: |
+          set -euo pipefail
+          SDK="\( {ANDROID_SDK_ROOT:- \){ANDROID_HOME:-}}"
+          if [ -n "$SDK" ]; then
+            echo "sdk.dir=$SDK" > local.properties
+          fi
+
       - name: gradlew exécutable
         working-directory: ${{ steps.root.outputs.project_root }}
         run: chmod +x ./gradlew
@@ -217,9 +278,10 @@ jobs:
         run: |
           if [ -n "\( {SBH_KEYSTORE_B64:-}" ] && [ -n " \){SBH_KEYSTORE_PASSWORD:-}" ] && [ -n "\( {SBH_KEY_ALIAS:-}" ] && [ -n " \){SBH_KEY_PASSWORD:-}" ]; then
             echo "has_signing=true" >> "$GITHUB_OUTPUT"
+            echo "Secrets de signature OK."
           else
             echo "has_signing=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Secrets absents — pas de release signée."
+            echo "::warning::Secrets absents — pas de release signée (debug déjà disponible)."
           fi
 
       - name: Préparer le keystore
@@ -268,6 +330,7 @@ jobs:
           open(os.environ["GITHUB_WORKSPACE"] + "/release-body.json", "w", encoding="utf-8").write(
               json.dumps(v, ensure_ascii=False, indent=2) + "\n"
           )
+          print("release-body.json ready; sha256=", v["sha256"])
           PY
 
       - name: Publier GitHub Release
