@@ -1,689 +1,315 @@
-name: Build SBh Studio APK
-
-on:
-  workflow_dispatch:
-  push:
-    branches:
-      - main
-      - master
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-
-    steps:
-
-      # =========================================================
-      # 1. CHECKOUT
-      # =========================================================
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      # =========================================================
-      # 2. TROUVER ET EXTRAIRE SBh STUDIO
-      # =========================================================
-      - name: Extraire SBh Studio
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "=========================================="
-          echo " EXTRACTION SBh STUDIO"
-          echo "=========================================="
-
-          ZIP="$(find . -type f -iname 'SBhStudio*.zip' | sort | head -n 1)"
-
-          if [ -z "$ZIP" ]; then
-            echo "❌ Aucun ZIP SBhStudio*.zip trouvé."
-            echo ""
-            find . -maxdepth 5 -type f | sort
-            exit 1
-          fi
-
-          echo "✅ ZIP trouvé : $ZIP"
-
-          rm -rf sbh
-          mkdir -p sbh
-
-          unzip -q "$ZIP" -d sbh
-
-          echo ""
-          echo "Recherche de gradlew :"
-          find sbh -type f -name "gradlew" -print
-
-      # =========================================================
-      # 3. DÉTECTER LE PROJET ANDROID
-      # =========================================================
-      - name: Détecter le projet Android
-        id: project
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          ROOT="$(dirname "$(find "$GITHUB_WORKSPACE/sbh" \
-            -type f \
-            -name "gradlew" \
-            -print -quit)")"
-
-          if [ -z "$ROOT" ] || [ ! -f "$ROOT/gradlew" ]; then
-            echo "❌ gradlew introuvable."
-
-            find "$GITHUB_WORKSPACE/sbh" \
-              -maxdepth 7 \
-              -type f \
-              | sort
-
-            exit 1
-          fi
-
-          echo "=========================================="
-          echo " PROJET ANDROID DÉTECTÉ"
-          echo "=========================================="
-
-          echo "$ROOT"
-
-          echo "root=$ROOT" >> "$GITHUB_OUTPUT"
-
-          ls -la "$ROOT"
-
-      # =========================================================
-      # 4. JAVA 17
-      # =========================================================
-      - name: Installer Java 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      # =========================================================
-      # 5. ANDROID SDK
-      # =========================================================
-      - name: Préparer Android SDK
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "=========================================="
-          echo " ANDROID SDK"
-          echo "=========================================="
-
-          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
-          export ANDROID_SDK_ROOT="$ANDROID_HOME"
-
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-
-          if [ ! -d "$ANDROID_HOME" ]; then
-            echo "❌ Android SDK introuvable."
-            exit 1
-          fi
-
-          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-
-          if [ ! -x "$SDKMANAGER" ]; then
-            echo "❌ sdkmanager introuvable ou non exécutable."
-            echo "$SDKMANAGER"
-            exit 1
-          fi
-
-          echo ""
-          echo "sdkmanager : $SDKMANAGER"
-
-          echo ""
-          echo "Version :"
-          "$SDKMANAGER" --version
-
-          echo ""
-          echo "Licences Android..."
-
-          yes | "$SDKMANAGER" --licenses >/dev/null || true
-
-          echo ""
-          echo "Installation Android..."
-
-          "$SDKMANAGER" \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
-
-          echo ""
-          echo "✅ Android SDK prêt."
-
-      # =========================================================
-      # 6. CORRIGER LE BLOC version.json
-      # =========================================================
-      - name: Corriger build.gradle.kts
+      - name: Diagnostiquer et corriger les erreurs Kotlin
         working-directory: ${{ steps.project.outputs.root }}
         shell: bash
         run: |
           set -euo pipefail
 
           echo "=========================================="
-          echo " CORRECTION VERSION"
-          echo "=========================================="
-
-          python3 <<'PY'
-          from pathlib import Path
-          import re
-
-          path = Path("app/build.gradle.kts")
-
-          if not path.exists():
-              raise SystemExit(
-                  "❌ app/build.gradle.kts introuvable"
-              )
-
-          text = path.read_text(encoding="utf-8")
-
-          match = re.search(
-              r'(?m)^android\s*\{',
-              text
-          )
-
-          if not match:
-              raise SystemExit(
-                  "❌ Bloc android { introuvable."
-              )
-
-          android_start = match.start()
-
-          before = text[:android_start]
-          after = text[android_start:]
-
-          # Supprimer toutes les anciennes variables de version.
-          patterns = [
-              r'(?ms)^[ \t]*val\s+sbhVersionText\s*=.*?(?=^[ \t]*val\s+|\Z)',
-              r'(?ms)^[ \t]*val\s+sbhVersionCode\s*=.*?(?=^[ \t]*val\s+|\Z)',
-              r'(?ms)^[ \t]*val\s+sbhVersionName\s*=.*?(?=^[ \t]*val\s+|\Z)',
-          ]
-
-          for pattern in patterns:
-              before = re.sub(pattern, '', before)
-
-          # Supprimer les anciennes lignes orphelines.
-          before = re.sub(
-              r'(?m)^[ \t]*\.find\(sbhVersionText\).*?\n?',
-              '',
-              before
-          )
-
-          before = re.sub(
-              r'(?m)^[ \t]*\?\.groupValues.*?\n?',
-              '',
-              before
-          )
-
-          before = re.sub(
-              r'(?m)^[ \t]*\?\.get\(1\).*?\n?',
-              '',
-              before
-          )
-
-          before = re.sub(
-              r'(?m)^[ \t]*\?\.toInt\(\).*?\n?',
-              '',
-              before
-          )
-
-          before = re.sub(
-              r'(?m)^[ \t]*\?:\s*error\(.*?\)\s*\n?',
-              '',
-              before
-          )
-
-          version_block = '''
-          val sbhVersionText = file("../version.json").readText()
-
-          val sbhVersionCode: Int =
-              Regex("""["]versionCode["]\\s*:\\s*(\\d+)""")
-                  .find(sbhVersionText)
-                  ?.groupValues
-                  ?.get(1)
-                  ?.toInt()
-                  ?: error("version.json: versionCode manquant")
-
-          val sbhVersionName: String =
-              Regex("""["]versionName["]\\s*:\\s*["]([^"]+)["]""")
-                  .find(sbhVersionText)
-                  ?.groupValues
-                  ?.get(1)
-                  ?: error("version.json: versionName manquant")
-          '''
-
-          fixed = (
-              before.rstrip()
-              + "\n\n"
-              + version_block.strip()
-              + "\n\n"
-              + after.lstrip()
-          )
-
-          path.write_text(
-              fixed,
-              encoding="utf-8"
-          )
-
-          print("✅ Bloc version reconstruit.")
-          PY
-
-          echo ""
-          nl -ba app/build.gradle.kts | sed -n '1,90p'
-
-          echo ""
-          echo "Vérification des doublons :"
-
-          TEXT_COUNT="$(grep -c 'val sbhVersionText' app/build.gradle.kts || true)"
-          CODE_COUNT="$(grep -c 'val sbhVersionCode' app/build.gradle.kts || true)"
-          NAME_COUNT="$(grep -c 'val sbhVersionName' app/build.gradle.kts || true)"
-
-          echo "sbhVersionText = $TEXT_COUNT"
-          echo "sbhVersionCode = $CODE_COUNT"
-          echo "sbhVersionName = $NAME_COUNT"
-
-          test "$TEXT_COUNT" -eq 1
-          test "$CODE_COUNT" -eq 1
-          test "$NAME_COUNT" -eq 1
-
-          echo "✅ Bloc version valide."
-
-      # =========================================================
-      # 7. CORRECTIONS KOTLIN
-      # =========================================================
-      - name: Corriger les erreurs Kotlin connues
-        working-directory: ${{ steps.project.outputs.root }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "=========================================="
-          echo " CORRECTIONS KOTLIN"
+          echo " DIAGNOSTIC KOTLIN"
           echo "=========================================="
 
           MAP_FILE="app/src/main/java/com/sbh/studio/mapeditor/MapEditorScreen.kt"
           REPORT_FILE="app/src/main/java/com/sbh/studio/ui/ReportsScreen.kt"
 
-          # -----------------------------------------------------
-          # MapEditorScreen.kt
-          # -----------------------------------------------------
-          if [ ! -f "$MAP_FILE" ]; then
-            echo "❌ Fichier introuvable : $MAP_FILE"
-            exit 1
-          fi
+          test -f "$MAP_FILE"
+          test -f "$REPORT_FILE"
 
           echo ""
-          echo "MapEditorScreen.kt"
-
-          if grep -q "fillMaxWidth" "$MAP_FILE"; then
-
-            if ! grep -q \
-              "androidx.compose.foundation.layout.fillMaxWidth" \
-              "$MAP_FILE"; then
-
-              python3 <<'PY'
-          from pathlib import Path
-
-          path = Path(
-              "app/src/main/java/com/sbh/studio/mapeditor/MapEditorScreen.kt"
-          )
-
-          text = path.read_text(encoding="utf-8")
-
-          if "import androidx.compose.foundation.layout.fillMaxWidth" not in text:
-              lines = text.splitlines()
-
-              insert_at = 0
-
-              for i, line in enumerate(lines):
-                  if line.startswith("package "):
-                      insert_at = i + 1
-                      break
-
-              while (
-                  insert_at < len(lines)
-                  and (
-                      lines[insert_at].strip() == ""
-                      or lines[insert_at].startswith("import ")
-                  )
-              ):
-                  insert_at += 1
-
-              imports = [
-                  "import androidx.compose.foundation.layout.fillMaxWidth"
-              ]
-
-              lines[insert_at:insert_at] = [""] + imports
-
-              path.write_text(
-                  "\n".join(lines) + "\n",
-                  encoding="utf-8"
-              )
-
-              print("✅ Import fillMaxWidth ajouté.")
-          else:
-              print("✅ Import fillMaxWidth déjà présent.")
-          PY
-
-            else
-              echo "✅ Import fillMaxWidth déjà présent."
-            fi
-
-          else
-            echo "⚠️ fillMaxWidth n'est pas présent dans le fichier."
-          fi
-
-          # -----------------------------------------------------
-          # ReportsScreen.kt
-          # -----------------------------------------------------
-          if [ ! -f "$REPORT_FILE" ]; then
-            echo "❌ Fichier introuvable : $REPORT_FILE"
-            exit 1
-          fi
+          echo "========== MapEditorScreen.kt =========="
+          echo "Contexte autour de la ligne 335 :"
+          nl -ba "$MAP_FILE" | sed -n '315,350p'
 
           echo ""
-          echo "ReportsScreen.kt"
+          echo "========== ReportsScreen.kt =========="
+          echo "Contexte autour de la ligne 142 :"
+          nl -ba "$REPORT_FILE" | sed -n '120,165p'
 
           echo ""
-          echo "Occurrences de SUCCESS avant correction :"
-          grep -n "SUCCESS" "$REPORT_FILE" || true
+          echo "========== Imports MapEditor =========="
+          grep -n '^import ' "$MAP_FILE" || true
+
+          echo ""
+          echo "========== Imports Reports =========="
+          grep -n '^import ' "$REPORT_FILE" || true
+
+          echo ""
+          echo "========== SUCCESS =========="
+          grep -n -C 5 'SUCCESS' "$REPORT_FILE" || true
+
+          echo ""
+          echo "========== Recherche des déclarations SUCCESS =========="
+          grep -RInE \
+            'enum class .*Status|sealed class .*Status|SUCCESS[ ,)]|SUCCESS[=:]' \
+            app/src/main/java/com/sbh/studio \
+            --include='*.kt' \
+            | head -n 200 || true
+
+          echo ""
+          echo "========== Recherche de height =========="
+          grep -n -C 4 '\.height' "$MAP_FILE" || true
 
           python3 <<'PY'
           from pathlib import Path
           import re
 
-          path = Path(
-              "app/src/main/java/com/sbh/studio/ui/ReportsScreen.kt"
-          )
+          map_path = Path("app/src/main/java/com/sbh/studio/mapeditor/MapEditorScreen.kt")
+          report_path = Path("app/src/main/java/com/sbh/studio/ui/ReportsScreen.kt")
 
-          text = path.read_text(encoding="utf-8")
+          map_text = map_path.read_text(encoding="utf-8")
+          report_text = report_path.read_text(encoding="utf-8")
 
-          # -----------------------------------------------------
-          # Chercher le type/enregistrement utilisé autour de
-          # SUCCESS afin d'éviter de remplacer aveuglément un
-          # identifiant qui pourrait avoir une autre signification.
-          # -----------------------------------------------------
+          # ------------------------------------------------------------
+          # 1. fillMaxWidth
+          # ------------------------------------------------------------
+          if "fillMaxWidth" in map_text:
+              if "import androidx.compose.foundation.layout.fillMaxWidth" not in map_text:
+                  lines = map_text.splitlines()
 
-          lines = text.splitlines()
+                  package_index = None
+                  for i, line in enumerate(lines):
+                      if line.startswith("package "):
+                          package_index = i
+                          break
 
+                  if package_index is not None:
+                      insert_at = package_index + 1
+
+                      while (
+                          insert_at < len(lines)
+                          and (
+                              lines[insert_at].strip() == ""
+                              or lines[insert_at].startswith("import ")
+                          )
+                      ):
+                          insert_at += 1
+
+                      lines.insert(
+                          insert_at,
+                          "import androidx.compose.foundation.layout.fillMaxWidth"
+                      )
+
+                      map_path.write_text(
+                          "\n".join(lines) + "\n",
+                          encoding="utf-8"
+                      )
+
+                      print("✅ Import fillMaxWidth ajouté.")
+              else:
+                  print("✅ fillMaxWidth déjà importé.")
+
+          # ------------------------------------------------------------
+          # 2. height
+          # ------------------------------------------------------------
+          #
+          # Le compilateur indique simplement "height" sans préciser
+          # le symbole attendu. On ne remplace donc PAS aveuglément.
+          #
+          # On vérifie d'abord si height est utilisé comme modifier
+          # Compose, par exemple .height(...).
+          #
+          if re.search(r'\.height\s*\(', map_text):
+              if "import androidx.compose.foundation.layout.height" not in map_text:
+                  lines = map_text.splitlines()
+
+                  package_index = None
+                  for i, line in enumerate(lines):
+                      if line.startswith("package "):
+                          package_index = i
+                          break
+
+                  if package_index is not None:
+                      insert_at = package_index + 1
+
+                      while (
+                          insert_at < len(lines)
+                          and (
+                              lines[insert_at].strip() == ""
+                              or lines[insert_at].startswith("import ")
+                          )
+                      ):
+                          insert_at += 1
+
+                      lines.insert(
+                          insert_at,
+                          "import androidx.compose.foundation.layout.height"
+                      )
+
+                      map_path.write_text(
+                          "\n".join(lines) + "\n",
+                          encoding="utf-8"
+                      )
+
+                      print("✅ Import Compose height ajouté.")
+              else:
+                  print("✅ Import Compose height déjà présent.")
+          else:
+              print("⚠️ height n'est pas utilisé sous la forme .height(...).")
+              print("⚠️ Aucun remplacement automatique effectué.")
+
+          # ------------------------------------------------------------
+          # 3. SUCCESS
+          # ------------------------------------------------------------
+          #
+          # On ne devine pas le nom d'un enum.
+          # On cherche les types réellement utilisés dans le fichier.
+          #
           success_lines = [
               (i + 1, line)
-              for i, line in enumerate(lines)
+              for i, line in enumerate(report_text.splitlines())
               if "SUCCESS" in line
           ]
 
-          print("Lignes SUCCESS détectées :")
+          print("")
+          print("Occurrences SUCCESS :")
           for number, line in success_lines:
               print(f"{number}: {line}")
 
-          # Si SUCCESS est utilisé comme enum mais que l'enum
-          # n'existe pas, on tente de détecter les autres valeurs
-          # de statut présentes dans le fichier.
-          enum_candidates = set()
+          # Si SUCCESS est déjà qualifié, aucune action.
+          # Exemple : ValidationStatus.SUCCESS
+          #
+          # Si c'est simplement SUCCESS, on cherche les enum/classes
+          # susceptibles de contenir SUCCESS dans tout le projet.
+          plain_success = [
+              (number, line)
+              for number, line in success_lines
+              if re.search(r'\bSUCCESS\b', line)
+              and not re.search(r'\b[A-Za-z_][A-Za-z0-9_]*\.SUCCESS\b', line)
+          ]
 
-          for line in lines:
-              m = re.search(
-                  r'\b([A-Z][A-Z0-9_]*)\b',
-                  line
-              )
+          if plain_success:
+              root = Path("app/src/main/java")
 
-              if m:
-                  enum_candidates.add(m.group(1))
+              candidates = []
+
+              for file in root.rglob("*.kt"):
+                  text = file.read_text(encoding="utf-8", errors="ignore")
+
+                  if not re.search(r'\bSUCCESS\b', text):
+                      continue
+
+                  # enum class Foo { ..., SUCCESS, ... }
+                  for match in re.finditer(
+                      r'enum\s+class\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{([^}]*)\}',
+                      text,
+                      re.S
+                  ):
+                      enum_name = match.group(1)
+                      body = match.group(2)
+
+                      if re.search(r'\bSUCCESS\b', body):
+                          candidates.append(
+                              (
+                                  str(file),
+                                  enum_name,
+                                  "enum"
+                              )
+                          )
+
+                  # sealed class Foo / object SUCCESS
+                  for match in re.finditer(
+                      r'(?:class|object)\s+([A-Za-z_][A-Za-z0-9_]*)',
+                      text
+                  ):
+                      name = match.group(1)
+
+                      if name == "SUCCESS":
+                          candidates.append(
+                              (
+                                  str(file),
+                                  name,
+                                  "class/object"
+                              )
+                          )
+
+              print("")
+              print("Candidats SUCCESS :")
+
+              for candidate in candidates:
+                  print(
+                      f"  fichier={candidate[0]} "
+                      f"type={candidate[1]} "
+                      f"nature={candidate[2]}"
+                  )
+
+              # Correction automatique uniquement si UN SEUL enum
+              # contient SUCCESS.
+              enum_candidates = [
+                  candidate
+                  for candidate in candidates
+                  if candidate[2] == "enum"
+              ]
+
+              unique_enums = []
+              seen = set()
+
+              for file, enum_name, kind in enum_candidates:
+                  key = (file, enum_name)
+                  if key not in seen:
+                      seen.add(key)
+                      unique_enums.append(key)
+
+              if len(unique_enums) == 1:
+                  enum_file, enum_name = unique_enums[0]
+
+                  print("")
+                  print(
+                      f"✅ Enum SUCCESS déterminé automatiquement : "
+                      f"{enum_name}"
+                  )
+
+                  updated = report_text
+
+                  # Remplace uniquement SUCCESS non précédé par un identifiant.
+                  updated = re.sub(
+                      r'(?<![\w.])SUCCESS\b',
+                      f"{enum_name}.SUCCESS",
+                      updated
+                  )
+
+                  report_path.write_text(
+                      updated,
+                      encoding="utf-8"
+                  )
+
+                  print(
+                      f"✅ SUCCESS remplacé par {enum_name}.SUCCESS"
+                  )
+              else:
+                  print("")
+                  print(
+                      "⚠️ Impossible de déterminer automatiquement "
+                      "le propriétaire de SUCCESS."
+                  )
+                  print(
+                      "⚠️ Aucun remplacement spéculatif effectué."
+                  )
+                  print(
+                      "⚠️ Le build s'arrêtera ici avec le diagnostic "
+                      "complet ci-dessus."
+                  )
 
           print("")
-          print("Constantes majuscules détectées :")
-          print(sorted(enum_candidates))
-
-          # Correction ciblée :
-          # si la référence est ReportStatus.SUCCESS et que le type
-          # utilise ResultStatus, remplacer par ResultStatus.SUCCESS.
-          text = text.replace(
-              "ReportStatus.SUCCESS",
-              "ResultStatus.SUCCESS"
-          )
-
-          # Cas fréquent dans ce projet :
-          # ValidationStatus.SUCCESS
-          # si ValidationStatus n'existe pas et ValidationResult existe.
-          text = text.replace(
-              "ValidationStatus.SUCCESS",
-              "ValidationResult.SUCCESS"
-          )
-
-          path.write_text(
-              text,
-              encoding="utf-8"
-          )
-
-          print("")
-          print("✅ Correction SUCCESS appliquée si nécessaire.")
+          print("==========================================")
+          print(" CORRECTIONS TERMINÉES")
+          print("==========================================")
           PY
 
           echo ""
-          echo "=========================================="
-          echo " VÉRIFICATION"
-          echo "=========================================="
+          echo "========== Vérification finale =========="
 
           echo ""
-          echo "fillMaxWidth :"
-          grep -n "fillMaxWidth" "$MAP_FILE" || true
+          echo "MapEditorScreen.kt:"
+          grep -n -E 'fillMaxWidth|\.height' "$MAP_FILE" || true
 
           echo ""
-          echo "SUCCESS :"
-          grep -n "SUCCESS" "$REPORT_FILE" || true
-
-      # =========================================================
-      # 8. LIRE VERSION.JSON
-      # =========================================================
-      - name: Lire version.json
-        id: version
-        working-directory: ${{ steps.project.outputs.root }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "=========================================="
-          echo " VERSION SBh STUDIO"
-          echo "=========================================="
-
-          if [ ! -f version.json ]; then
-            echo "❌ version.json introuvable."
-            exit 1
-          fi
-
-          cat version.json
-
-          VERSION="$(
-            python3 -c '
-          import json
-          with open("version.json", encoding="utf-8") as f:
-              data = json.load(f)
-          print(data["versionName"])
-          '
-          )"
-
-          CODE="$(
-            python3 -c '
-          import json
-          with open("version.json", encoding="utf-8") as f:
-              data = json.load(f)
-          print(data["versionCode"])
-          '
-          )"
+          echo "ReportsScreen.kt:"
+          nl -ba "$REPORT_FILE" | sed -n '135,150p'
 
           echo ""
-          echo "Version : $VERSION"
-          echo "Code    : $CODE"
-
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "code=$CODE" >> "$GITHUB_OUTPUT"
-
-      # =========================================================
-      # 9. GRADLE
-      # =========================================================
-      - name: Préparer Gradle
-        working-directory: ${{ steps.project.outputs.root }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          chmod +x gradlew
-
-          ./gradlew --version
-
-      # =========================================================
-      # 10. VALIDATION SBh
-      # =========================================================
-      - name: Validation SBh Studio
-        working-directory: ${{ steps.project.outputs.root }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "=========================================="
-          echo " VALIDATION"
-          echo "=========================================="
-
-          if [ -f tools/validate_sbh.py ]; then
-            python3 tools/validate_sbh.py
-          else
-            echo "⚠️ validate_sbh.py absent."
-            echo "Compilation maintenue."
-          fi
-
-      # =========================================================
-      # 11. NETTOYAGE
-      # =========================================================
-      - name: Nettoyer le projet
-        working-directory: ${{ steps.project.outputs.root }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "=========================================="
-          echo " NETTOYAGE"
-          echo "=========================================="
-
-          ./gradlew clean --no-daemon
-
-      # =========================================================
-      # 12. COMPILATION
-      # =========================================================
-      - name: Compiler APK Debug
-        working-directory: ${{ steps.project.outputs.root }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "=========================================="
-          echo " COMPILATION SBh STUDIO"
-          echo "=========================================="
-
-          ./gradlew assembleDebug \
-            --no-daemon \
-            --stacktrace
-
-      # =========================================================
-      # 13. VÉRIFIER APK
-      # =========================================================
-      - name: Vérifier APK
-        working-directory: ${{ steps.project.outputs.root }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "=========================================="
-          echo " APK"
-          echo "=========================================="
-
-          APK="$(
-            find app/build/outputs/apk/debug \
-              -type f \
-              -name '*.apk' \
-              -print \
-              | head -n 1
-          )"
-
-          if [ -z "$APK" ]; then
-            echo "❌ Aucun APK généré."
-            find app/build \
-              -maxdepth 7 \
-              -type f \
-              | sort || true
-            exit 1
-          fi
-
-          echo "✅ APK trouvé : $APK"
-
-          ls -lh "$APK"
+          echo "Imports:"
+          grep -n '^import androidx.compose.foundation.layout' "$MAP_FILE" || true
 
           echo ""
-          echo "SHA256 :"
-          sha256sum "$APK"
-
-      # =========================================================
-      # 14. PRÉPARER APK FINAL
-      # =========================================================
-      - name: Préparer APK final
-        working-directory: ${{ steps.project.outputs.root }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          mkdir -p release
-
-          APK="$(
-            find app/build/outputs/apk/debug \
-              -type f \
-              -name '*.apk' \
-              -print \
-              | head -n 1
-          )"
-
-          FINAL="release/SBhStudio-V${{ steps.version.outputs.version }}-debug.apk"
-
-          cp "$APK" "$FINAL"
-
           echo "=========================================="
-          echo " APK FINAL"
-          echo "=========================================="
-
-          ls -lh "$FINAL"
-
-      # =========================================================
-      # 15. PUBLIER APK
-      # =========================================================
-      - name: Publier APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: SBh-Studio-V${{ steps.version.outputs.version }}-APK
-          path: ${{ steps.project.outputs.root }}/release/SBhStudio-V${{ steps.version.outputs.version }}-debug.apk
-          if-no-files-found: error
-          retention-days: 30
-
-      # =========================================================
-      # 16. RAPPORT FINAL
-      # =========================================================
-      - name: Rapport final
-        shell: bash
-        run: |
-          echo ""
-          echo "=========================================="
-          echo " SBh STUDIO - BUILD TERMINÉ"
-          echo "=========================================="
-          echo ""
-          echo "Version : ${{ steps.version.outputs.version }}"
-          echo "Code    : ${{ steps.version.outputs.code }}"
-          echo ""
-          echo "✅ ZIP extrait"
-          echo "✅ Projet Android détecté"
-          echo "✅ Java 17"
-          echo "✅ Android SDK"
-          echo "✅ version.json"
-          echo "✅ Kotlin corrigé"
-          echo "✅ Validation"
-          echo "✅ Gradle"
-          echo "✅ APK compilé"
-          echo "✅ APK publié"
-          echo ""
-          echo "SBhStudio-V${{ steps.version.outputs.version }}-debug.apk"
-          echo ""
+          echo " FIN DIAGNOSTIC"
           echo "=========================================="
