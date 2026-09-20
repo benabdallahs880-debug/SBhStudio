@@ -20,10 +20,13 @@ concurrency:
   group: sbh-studio-v1.4-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  SBH_ARCHIVE: SBhStudio_v1.4_sbh_world_agw_integration.zip
+
 jobs:
 
   # ============================================================
-  # 1. INSPECTION DU PROJET
+  # INSPECTION DU PROJET
   # ============================================================
 
   inspect:
@@ -35,326 +38,513 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Afficher la structure
+
+      - name: Vérifier l'archive V1.4
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=============================================="
+          echo "       SBH STUDIO V1.4 - ARCHIVE CHECK"
+          echo "=============================================="
+
+          if [ ! -f "$SBH_ARCHIVE" ]; then
+            echo "ERREUR : archive introuvable :"
+            echo "$SBH_ARCHIVE"
+            echo ""
+            echo "Fichiers disponibles :"
+            find . -maxdepth 3 -type f | sort
+            exit 1
+          fi
+
+          echo "Archive trouvée :"
+          echo "$SBH_ARCHIVE"
+
+
+      - name: Extraire SBH Studio V1.4
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -rf sbhstudio-src
+
+          mkdir -p sbhstudio-src
+
+          unzip -q "$SBH_ARCHIVE" -d sbhstudio-src
+
+          echo "=============================================="
+          echo "       CONTENU DE L'ARCHIVE"
+          echo "=============================================="
+
+          find sbhstudio-src -maxdepth 5 -type f | sort | head -500
+
+
+      - name: Détecter le projet Gradle
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=============================================="
+          echo "       DETECTION DU PROJET ANDROID"
+          echo "=============================================="
+
+          PROJECT_DIR=""
+
+          PROJECT_DIR=$(find sbhstudio-src \
+            -type f \
+            -name "gradlew" \
+            -print \
+            -quit | xargs -r dirname)
+
+          if [ -z "$PROJECT_DIR" ]; then
+            PROJECT_DIR=$(find sbhstudio-src \
+              -type f \
+              \( \
+                -name "settings.gradle" \
+                -o \
+                -name "settings.gradle.kts" \
+              \) \
+              -print \
+              -quit | xargs -r dirname)
+          fi
+
+          if [ -z "$PROJECT_DIR" ]; then
+
+            echo "=============================================="
+            echo "ERREUR : PROJET GRADLE NON TROUVE"
+            echo "=============================================="
+
+            echo ""
+            echo "Gradle détecté :"
+
+            find sbhstudio-src \
+              -type f \
+              \( \
+                -name "*.gradle" \
+                -o \
+                -name "*.gradle.kts" \
+                -o \
+                -name "gradlew" \
+                -o \
+                -name "settings.gradle" \
+                -o \
+                -name "settings.gradle.kts" \
+              \) \
+              -print || true
+
+            exit 1
+          fi
+
+          echo "Projet Android détecté :"
+          echo "$PROJECT_DIR"
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+          chmod +x "$PROJECT_DIR/gradlew"
+
+
+      - name: Vérifier la structure Gradle
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=============================================="
+          echo "       VERIFICATION GRADLE"
+          echo "=============================================="
+
+          test -f "$PROJECT_DIR/gradlew"
+
+          test -f \
+            "$PROJECT_DIR/gradle/wrapper/gradle-wrapper.properties"
+
+          if [ ! -f "$PROJECT_DIR/settings.gradle" ] && \
+             [ ! -f "$PROJECT_DIR/settings.gradle.kts" ]; then
+            echo "ERREUR : settings.gradle introuvable."
+            exit 1
+          fi
+
+          if [ ! -f "$PROJECT_DIR/build.gradle" ] && \
+             [ ! -f "$PROJECT_DIR/build.gradle.kts" ]; then
+            echo "ERREUR : build.gradle introuvable."
+            exit 1
+          fi
+
+          echo "Structure Gradle OK."
+
+
+      - name: Vérifier la version Gradle
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$PROJECT_DIR"
+
+          ./gradlew --version
+
+
+      - name: Rechercher AGW World Core
         shell: bash
         run: |
           echo "=============================================="
-          echo "       SBH STUDIO V1.4 - INSPECTION"
+          echo "       AGW WORLD CORE"
           echo "=============================================="
 
-          echo ""
-          echo "Racine du dépôt :"
-          ls -lah
-
-          echo ""
-          echo "Fichiers importants :"
-
-          find . \
-            -maxdepth 4 \
+          find sbhstudio-src \
             -type f \
             \( \
-              -name "settings.gradle" \
-              -o -name "settings.gradle.kts" \
-              -o -name "build.gradle" \
-              -o -name "build.gradle.kts" \
-              -o -name "gradle.properties" \
-              -o -name "gradlew" \
-              -o -name "AndroidManifest.xml" \
-              -o -name "project.godot" \
-              -o -name "agw_world_core.json" \
-              -o -name "*.json" \
+              -iname "agw_world_core.json" \
+              -o \
+              -iname "*agw*world*core*.json" \
+              -o \
+              -iname "*worldcore*.json" \
             \) \
-            | sort | head -500
-
-      - name: Vérifier la configuration Android/Gradle
-        shell: bash
-        run: |
-          echo "===== DETECTION PROJET ====="
-
-          if [ -f "gradlew" ]; then
-            echo "Projet Gradle Android détecté."
-          elif [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
-            echo "Configuration Gradle détectée."
-          else
-            echo "ATTENTION : aucun projet Gradle trouvé à la racine."
-          fi
-
-          if [ -f "settings.gradle" ]; then
-            echo "settings.gradle trouvé."
-          fi
-
-          if [ -f "settings.gradle.kts" ]; then
-            echo "settings.gradle.kts trouvé."
-          fi
-
-          if [ -d "app" ]; then
-            echo "Module app trouvé."
-          fi
+            -print || true
 
 
   # ============================================================
-  # 2. BUILD ANDROID
+  # BUILD ANDROID
   # ============================================================
 
   build:
     name: Build SBH Studio V1.4
     runs-on: ubuntu-latest
-    needs: inspect
 
-    env:
-      JAVA_VERSION: "17"
+    needs:
+      - inspect
 
     steps:
-
-      # ----------------------------------------------------------
-      # CHECKOUT
-      # ----------------------------------------------------------
 
       - name: Checkout
         uses: actions/checkout@v4
 
 
-      # ----------------------------------------------------------
+      - name: Vérifier l'archive
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f "$SBH_ARCHIVE"
+
+
+      - name: Extraire SBH Studio V1.4
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -rf sbhstudio-src
+
+          mkdir -p sbhstudio-src
+
+          unzip -q "$SBH_ARCHIVE" -d sbhstudio-src
+
+
+      - name: Détecter le projet Gradle
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PROJECT_DIR=$(find sbhstudio-src \
+            -type f \
+            -name "gradlew" \
+            -print \
+            -quit | xargs -r dirname)
+
+          if [ -z "$PROJECT_DIR" ]; then
+
+            PROJECT_DIR=$(find sbhstudio-src \
+              -type f \
+              \( \
+                -name "settings.gradle" \
+                -o \
+                -name "settings.gradle.kts" \
+              \) \
+              -print \
+              -quit | xargs -r dirname)
+
+          fi
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "ERREUR : impossible de détecter le projet Gradle."
+            exit 1
+          fi
+
+          echo "Projet : $PROJECT_DIR"
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+          chmod +x "$PROJECT_DIR/gradlew"
+
+
+      # ========================================================
       # JAVA
-      # ----------------------------------------------------------
+      # ========================================================
 
       - name: Installer Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
-          cache: gradle
 
 
-      # ----------------------------------------------------------
+      # ========================================================
       # ANDROID SDK
-      # ----------------------------------------------------------
+      # ========================================================
 
       - name: Installer Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Installer composants Android
+
+      - name: Installer les composants Android
         shell: bash
         run: |
+          set -euo pipefail
+
+          echo "=============================================="
+          echo "       ANDROID SDK"
+          echo "=============================================="
+
           sdkmanager "platform-tools"
+
+          sdkmanager "platforms;android-34"
+
           sdkmanager "platforms;android-35"
+
+          sdkmanager "build-tools;34.0.0"
+
           sdkmanager "build-tools;35.0.0"
 
+          yes | sdkmanager --licenses >/dev/null || true
 
-      # ----------------------------------------------------------
-      # GRADLE WRAPPER
-      # ----------------------------------------------------------
 
-      - name: Vérifier Gradle Wrapper
+      # ========================================================
+      # GRADLE
+      # ========================================================
+
+      - name: Vérifier Gradle
         shell: bash
         run: |
-          echo "===== GRADLE WRAPPER ====="
+          set -euo pipefail
 
-          if [ ! -f "gradlew" ]; then
-            echo "ERREUR : gradlew introuvable."
-            echo ""
-            echo "SBH Studio V1.4 doit fournir son Gradle Wrapper."
-            exit 1
-          fi
+          cd "$PROJECT_DIR"
 
-          chmod +x gradlew
+          echo "=============================================="
+          echo "       GRADLE"
+          echo "=============================================="
 
           ./gradlew --version
 
 
-      # ----------------------------------------------------------
-      # VALIDATION DES FICHIERS
-      # ----------------------------------------------------------
-
-      - name: Vérifier les fichiers SBH Studio
-        shell: bash
-        run: |
-          echo "===== VALIDATION PROJET ====="
-
-          test -f "settings.gradle" \
-            || test -f "settings.gradle.kts" \
-            || {
-              echo "ERREUR : settings.gradle(.kts) absent."
-              exit 1
-            }
-
-          test -f "build.gradle" \
-            || test -f "build.gradle.kts" \
-            || {
-              echo "ERREUR : build.gradle(.kts) absent."
-              exit 1
-            }
-
-          echo "Configuration Gradle détectée."
-
-
-      # ----------------------------------------------------------
+      # ========================================================
       # AGW WORLD CORE
-      # ----------------------------------------------------------
+      # ========================================================
 
       - name: Vérifier AGW World Core
         shell: bash
         run: |
           echo "=============================================="
-          echo "          AGW WORLD CORE CHECK"
+          echo "       AGW WORLD CORE CHECK"
           echo "=============================================="
 
-          FOUND=0
-
-          if find . -type f \
+          find "$PROJECT_DIR" \
+            -type f \
             \( \
               -iname "agw_world_core.json" \
-              -o -iname "*agw*world*core*.json" \
-              -o -iname "*worldcore*.json" \
-            \) | grep -q .; then
-
-            echo "AGW World Core détecté."
-            FOUND=1
-
-          fi
-
-          if [ "$FOUND" -eq 0 ]; then
-            echo "ATTENTION : AGW World Core non détecté."
-            echo "Le build Android peut continuer."
-          fi
+              -o \
+              -iname "*agw*world*core*.json" \
+              -o \
+              -iname "*worldcore*.json" \
+            \) \
+            -print || true
 
 
-      # ----------------------------------------------------------
+      # ========================================================
       # VALIDATION JSON
-      # ----------------------------------------------------------
+      # ========================================================
 
       - name: Valider les fichiers JSON
         shell: bash
         run: |
-          echo "===== VALIDATION JSON ====="
+          set -euo pipefail
 
-          python3 - <<'PY'
+          python3 - "$PROJECT_DIR" <<'PY'
+
           import json
           import pathlib
           import sys
 
-          files = list(pathlib.Path(".").rglob("*.json"))
+          root = pathlib.Path(sys.argv[1])
+
+          files = list(root.rglob("*.json"))
 
           errors = 0
 
+          print("==============================================")
+          print("       VALIDATION JSON")
+          print("==============================================")
+
+          print(f"JSON trouvés : {len(files)}")
+
           for path in files:
+
               try:
-                  with path.open("r", encoding="utf-8") as f:
+
+                  with path.open(
+                      "r",
+                      encoding="utf-8"
+                  ) as f:
+
                       json.load(f)
-              except Exception as e:
-                  print(f"JSON INVALID : {path}")
-                  print(e)
+
+              except Exception as exc:
+
+                  print("")
+                  print("JSON INVALID")
+                  print(path)
+                  print(exc)
+
                   errors += 1
 
+          print("")
           print(f"JSON analysés : {len(files)}")
 
-          if errors:
-              print(f"ERREURS JSON : {errors}")
+          if errors > 0:
+
+              print(
+                  f"Nombre d'erreurs JSON : {errors}"
+              )
+
               sys.exit(1)
 
-          print("Tous les JSON sont valides.")
+          print("Tous les fichiers JSON sont valides.")
+
           PY
 
 
-      # ----------------------------------------------------------
-      # GRADLE CLEAN
-      # ----------------------------------------------------------
+      # ========================================================
+      # CLEAN
+      # ========================================================
 
-      - name: Nettoyer Gradle
+      - name: Nettoyer le projet
         shell: bash
         run: |
-          ./gradlew clean
+          set -euo pipefail
+
+          cd "$PROJECT_DIR"
+
+          echo "=============================================="
+          echo "       GRADLE CLEAN"
+          echo "=============================================="
+
+          ./gradlew clean \
+            --stacktrace \
+            --no-daemon
 
 
-      # ----------------------------------------------------------
-      # COMPILATION
-      # ----------------------------------------------------------
+      # ========================================================
+      # BUILD DEBUG
+      # ========================================================
 
-      - name: Compiler SBH Studio
+      - name: Compiler SBH Studio V1.4
         shell: bash
         run: |
+          set -euo pipefail
+
+          cd "$PROJECT_DIR"
+
           echo "=============================================="
-          echo "        COMPILATION SBH STUDIO V1.4"
+          echo "       SBH STUDIO V1.4 BUILD"
           echo "=============================================="
 
-          ./gradlew assembleDebug --stacktrace
+          ./gradlew assembleDebug \
+            --stacktrace \
+            --no-daemon
 
 
-      # ----------------------------------------------------------
+      # ========================================================
       # TESTS
-      # ----------------------------------------------------------
+      # ========================================================
 
-      - name: Tests Gradle
+      - name: Lancer les tests Gradle
         shell: bash
         run: |
-          echo "===== TESTS ====="
+          set -euo pipefail
+
+          cd "$PROJECT_DIR"
+
+          echo "=============================================="
+          echo "       TESTS"
+          echo "=============================================="
 
           ./gradlew test \
             --stacktrace \
+            --no-daemon \
             --continue
 
 
-      # ----------------------------------------------------------
-      # VERIFICATION APK
-      # ----------------------------------------------------------
+      # ========================================================
+      # RECHERCHE APK
+      # ========================================================
 
-      - name: Rechercher APK
+      - name: Rechercher l'APK
         shell: bash
         run: |
-          echo "===== APK ====="
+          set -euo pipefail
 
-          find . \
+          echo "=============================================="
+          echo "       APK PRODUITS"
+          echo "=============================================="
+
+          find "$PROJECT_DIR" \
             -type f \
             -name "*.apk" \
             -print
 
-          APK_COUNT=$(find . -type f -name "*.apk" | wc -l)
-
-          if [ "$APK_COUNT" -eq 0 ]; then
-            echo "ERREUR : aucun APK généré."
-            exit 1
-          fi
-
-          echo "APK trouvés : $APK_COUNT"
-
-
-      # ----------------------------------------------------------
-      # RENOMMER APK
-      # ----------------------------------------------------------
-
-      - name: Préparer APK SBH Studio
-        shell: bash
-        run: |
-          mkdir -p artifacts
-
-          APK=$(find . \
+          APK=$(find "$PROJECT_DIR" \
             -type f \
             -name "*debug*.apk" \
-            | head -1)
+            -print \
+            -quit)
 
           if [ -z "$APK" ]; then
-            APK=$(find . \
+
+            APK=$(find "$PROJECT_DIR" \
               -type f \
               -name "*.apk" \
-              | head -1)
+              -print \
+              -quit)
+
           fi
 
           if [ -z "$APK" ]; then
-            echo "ERREUR : APK introuvable."
+
+            echo "=============================================="
+            echo "ERREUR : AUCUN APK GENERE"
+            echo "=============================================="
+
             exit 1
+
           fi
+
+          echo "APK trouvé :"
+          echo "$APK"
+
+          mkdir -p artifacts
 
           cp "$APK" \
             "artifacts/SBH_Studio_V1.4_debug.apk"
 
-          ls -lh artifacts/
+          echo ""
+          echo "APK préparé :"
+
+          ls -lh \
+            "artifacts/SBH_Studio_V1.4_debug.apk"
 
 
-      # ----------------------------------------------------------
-      # ARTIFACT GITHUB
-      # ----------------------------------------------------------
+      # ========================================================
+      # UPLOAD APK
+      # ========================================================
 
-      - name: Publier APK
+      - name: Publier l'APK
         uses: actions/upload-artifact@v4
         with:
           name: SBH-Studio-V1.4-Android
@@ -362,23 +552,33 @@ jobs:
           if-no-files-found: error
 
 
-      # ----------------------------------------------------------
-      # RESUME
-      # ----------------------------------------------------------
+      # ========================================================
+      # RAPPORT FINAL
+      # ========================================================
 
       - name: Rapport final
         shell: bash
         run: |
           echo ""
           echo "=============================================="
-          echo "       SBH STUDIO V1.4 BUILD TERMINE"
+          echo "       SBH STUDIO V1.4"
+          echo "       BUILD TERMINE"
           echo "=============================================="
           echo ""
-          echo "Application : SBH Studio"
-          echo "Version     : V1.4"
-          echo "Plateforme  : Android"
+          echo "Archive :"
+          echo "$SBH_ARCHIVE"
           echo ""
-          echo "APK : SBH_Studio_V1.4_debug.apk"
+          echo "Integration :"
+          echo "SBH Studio"
+          echo "SBH World"
+          echo "AGW World Core"
           echo ""
-          echo "Artifact GitHub : SBH-Studio-V1.4-Android"
+          echo "Build : DEBUG"
           echo ""
+          echo "Artifact :"
+          echo "SBH-Studio-V1.4-Android"
+          echo ""
+          echo "APK :"
+          echo "SBH_Studio_V1.4_debug.apk"
+          echo ""
+          echo "=============================================="
