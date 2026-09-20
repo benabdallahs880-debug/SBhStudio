@@ -21,78 +21,197 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+
   # ============================================================
-  # 1. Validation + APK Debug
+  # 1. VALIDATION + APK DEBUG
   # ============================================================
   analyze-and-debug:
     name: Validate + Debug APK
     runs-on: ubuntu-latest
 
     steps:
+
+      # ----------------------------------------------------------
+      # Checkout
+      # ----------------------------------------------------------
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Vérifier la structure du projet
+      # ----------------------------------------------------------
+      # Diagnostic et vérification de la racine
+      # ----------------------------------------------------------
+      - name: Diagnostiquer et vérifier la structure du projet
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "=== Vérification SBh Studio ==="
+          echo "======================================"
+          echo " SBh Studio V1.4 - Diagnostic"
+          echo "======================================"
 
-          test -f gradlew
-          test -f settings.gradle.kts
-          test -f app/build.gradle.kts
-          test -f version.json
-          test -f tools/validate_sbh.py
+          echo ""
+          echo "Répertoire courant :"
+          pwd
 
-          echo "Structure Android détectée."
+          echo ""
+          echo "Contenu racine :"
+          ls -la
 
+          echo ""
+          echo "Recherche des fichiers principaux :"
+
+          for file in \
+            gradlew \
+            settings.gradle.kts \
+            app/build.gradle.kts \
+            version.json \
+            tools/validate_sbh.py
+          do
+            if [ -f "$file" ]; then
+              echo "✅ $file"
+            else
+              echo "❌ $file MANQUANT"
+            fi
+          done
+
+          echo ""
+          echo "Vérification finale..."
+
+          missing=0
+
+          [ -f gradlew ] || missing=1
+          [ -f settings.gradle.kts ] || missing=1
+          [ -f app/build.gradle.kts ] || missing=1
+          [ -f version.json ] || missing=1
+          [ -f tools/validate_sbh.py ] || missing=1
+
+          if [ "$missing" -ne 0 ]; then
+            echo ""
+            echo "❌ STRUCTURE DU PROJET INCORRECTE"
+            echo ""
+            echo "Le dépôt doit contenir directement :"
+            echo "  gradlew"
+            echo "  settings.gradle.kts"
+            echo "  app/"
+            echo "  version.json"
+            echo "  tools/"
+            echo ""
+            echo "Le projet ne doit PAS être placé dans :"
+            echo "  SBhStudio_GitHubReady/SBhStudio/..."
+            echo "  studio/..."
+            echo "  projet/..."
+            exit 1
+          fi
+
+          echo ""
+          echo "✅ Structure Android détectée."
+
+      # ----------------------------------------------------------
+      # Permissions Gradle
+      # ----------------------------------------------------------
       - name: Donner les droits à Gradle
         run: chmod +x gradlew
 
+      # ----------------------------------------------------------
+      # Python
+      # ----------------------------------------------------------
       - name: Installer Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.x"
 
+      # ----------------------------------------------------------
+      # Validation SBh Studio
+      # ----------------------------------------------------------
       - name: Validation statique SBh Studio
+        shell: bash
         run: |
+          set -euo pipefail
+
+          echo "======================================"
+          echo " Validation SBh Studio"
+          echo "======================================"
+
           python3 tools/validate_sbh.py
 
-      - name: Vérifier la version
+      # ----------------------------------------------------------
+      # Vérification version
+      # ----------------------------------------------------------
+      - name: Vérifier la version SBh Studio
         shell: bash
         run: |
           set -euo pipefail
 
           VERSION_NAME=$(python3 - <<'PY'
           import json
+
           with open("version.json", encoding="utf-8") as f:
-              print(json.load(f)["versionName"])
+              data = json.load(f)
+
+          print(data["versionName"])
           PY
           )
 
           VERSION_CODE=$(python3 - <<'PY'
           import json
+
           with open("version.json", encoding="utf-8") as f:
-              print(json.load(f)["versionCode"])
+              data = json.load(f)
+
+          print(data["versionCode"])
           PY
           )
 
-          echo "SBh Studio version: ${VERSION_NAME}"
-          echo "Version code: ${VERSION_CODE}"
+          echo "Version : ${VERSION_NAME}"
+          echo "Version code : ${VERSION_CODE}"
 
-          test "$VERSION_NAME" = "1.4.0"
-          test "$VERSION_CODE" = "29"
+          if [ "$VERSION_NAME" != "1.4.0" ]; then
+            echo "❌ Version incorrecte : ${VERSION_NAME}"
+            echo "Version attendue : 1.4.0"
+            exit 1
+          fi
 
+          if [ "$VERSION_CODE" != "29" ]; then
+            echo "❌ Version code incorrect : ${VERSION_CODE}"
+            echo "Version attendue : 29"
+            exit 1
+          fi
+
+          echo "✅ Version SBh Studio 1.4.0 confirmée."
+
+      # ----------------------------------------------------------
+      # Android SDK
+      # ----------------------------------------------------------
       - name: Configuration Android
         uses: android-actions/setup-android@v3
 
+      # ----------------------------------------------------------
+      # Nettoyage
+      # ----------------------------------------------------------
       - name: Nettoyage Gradle
-        run: ./gradlew clean --no-daemon
+        shell: bash
+        run: |
+          set -euo pipefail
 
+          ./gradlew clean \
+            --no-daemon \
+            --stacktrace
+
+      # ----------------------------------------------------------
+      # APK DEBUG
+      # ----------------------------------------------------------
       - name: Build APK Debug
-        run: ./gradlew assembleDebug --no-daemon --stacktrace
+        shell: bash
+        run: |
+          set -euo pipefail
 
+          ./gradlew assembleDebug \
+            --no-daemon \
+            --stacktrace
+
+      # ----------------------------------------------------------
+      # Vérification APK DEBUG
+      # ----------------------------------------------------------
       - name: Vérifier APK Debug
         shell: bash
         run: |
@@ -100,24 +219,34 @@ jobs:
 
           APK="app/build/outputs/apk/debug/app-debug.apk"
 
-          test -f "$APK"
+          if [ ! -f "$APK" ]; then
+            echo "❌ APK Debug introuvable."
+            exit 1
+          fi
 
-          echo "APK Debug trouvé : $APK"
+          echo "✅ APK Debug généré."
+          echo "Fichier : $APK"
+
           ls -lh "$APK"
 
-      - name: Publier APK Debug comme artifact
+      # ----------------------------------------------------------
+      # Artifact DEBUG
+      # ----------------------------------------------------------
+      - name: Publier APK Debug
         uses: actions/upload-artifact@v4
         with:
-          name: SBh-Studio-${{ github.sha }}-debug
+          name: SBh-Studio-v1.4.0-debug
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
+
   # ============================================================
-  # 2. APK Release signé
+  # 2. APK RELEASE SIGNÉ
   # ============================================================
   release:
     name: Build Release APK
     needs: analyze-and-debug
+
     if: >
       github.event_name == 'push' ||
       (
@@ -128,39 +257,73 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
+      # ----------------------------------------------------------
+      # Checkout
+      # ----------------------------------------------------------
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ----------------------------------------------------------
+      # Permissions Gradle
+      # ----------------------------------------------------------
       - name: Donner les droits à Gradle
         run: chmod +x gradlew
 
+      # ----------------------------------------------------------
+      # Python
+      # ----------------------------------------------------------
       - name: Installer Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.x"
 
+      # ----------------------------------------------------------
+      # Validation
+      # ----------------------------------------------------------
       - name: Validation SBh Studio
-        run: python3 tools/validate_sbh.py
+        shell: bash
+        run: |
+          set -euo pipefail
 
+          python3 tools/validate_sbh.py
+
+      # ----------------------------------------------------------
+      # Android SDK
+      # ----------------------------------------------------------
       - name: Configuration Android
         uses: android-actions/setup-android@v3
 
       # ----------------------------------------------------------
-      # Signature Android
+      # Préparer la clé de signature
       # ----------------------------------------------------------
       - name: Préparer la clé de signature
+        shell: bash
         env:
           SBH_KEYSTORE_B64: ${{ secrets.SBH_KEYSTORE_B64 }}
         run: |
           set -euo pipefail
 
-          test -n "$SBH_KEYSTORE_B64"
+          if [ -z "$SBH_KEYSTORE_B64" ]; then
+            echo "❌ SBH_KEYSTORE_B64 est absent."
+            exit 1
+          fi
 
-          echo "$SBH_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/sbh-release.keystore"
+          echo "$SBH_KEYSTORE_B64" | base64 --decode \
+            > "$RUNNER_TEMP/sbh-release.keystore"
 
-          test -s "$RUNNER_TEMP/sbh-release.keystore"
+          if [ ! -s "$RUNNER_TEMP/sbh-release.keystore" ]; then
+            echo "❌ Le keystore n'a pas pu être créé."
+            exit 1
+          fi
 
+          echo "✅ Keystore de signature préparé."
+
+      # ----------------------------------------------------------
+      # Vérifier les secrets
+      # ----------------------------------------------------------
       - name: Vérifier les secrets de signature
+        shell: bash
         env:
           SBH_KEYSTORE_PASSWORD: ${{ secrets.SBH_KEYSTORE_PASSWORD }}
           SBH_KEY_ALIAS: ${{ secrets.SBH_KEY_ALIAS }}
@@ -168,57 +331,88 @@ jobs:
         run: |
           set -euo pipefail
 
-          test -n "$SBH_KEYSTORE_PASSWORD"
-          test -n "$SBH_KEY_ALIAS"
-          test -n "$SBH_KEY_PASSWORD"
+          if [ -z "$SBH_KEYSTORE_PASSWORD" ]; then
+            echo "❌ SBH_KEYSTORE_PASSWORD est absent."
+            exit 1
+          fi
 
-          echo "Secrets de signature présents."
+          if [ -z "$SBH_KEY_ALIAS" ]; then
+            echo "❌ SBH_KEY_ALIAS est absent."
+            exit 1
+          fi
+
+          if [ -z "$SBH_KEY_PASSWORD" ]; then
+            echo "❌ SBH_KEY_PASSWORD est absent."
+            exit 1
+          fi
+
+          echo "✅ Secrets de signature présents."
 
       # ----------------------------------------------------------
-      # Build Release
+      # BUILD RELEASE
       # ----------------------------------------------------------
       - name: Build APK Release signé
+        shell: bash
         env:
           SBH_KEYSTORE_FILE: ${{ runner.temp }}/sbh-release.keystore
           SBH_KEYSTORE_PASSWORD: ${{ secrets.SBH_KEYSTORE_PASSWORD }}
           SBH_KEY_ALIAS: ${{ secrets.SBH_KEY_ALIAS }}
           SBH_KEY_PASSWORD: ${{ secrets.SBH_KEY_PASSWORD }}
         run: |
+          set -euo pipefail
+
           ./gradlew assembleRelease \
             --no-daemon \
             --stacktrace
 
-      - name: Vérifier APK Release
+      # ----------------------------------------------------------
+      # Préparer le dossier Release
+      # ----------------------------------------------------------
+      - name: Préparer les fichiers Release
         shell: bash
         run: |
           set -euo pipefail
+
+          mkdir -p release
 
           APK=$(find app/build/outputs/apk/release \
             -type f \
             -name "*.apk" \
             | head -n 1)
 
-          test -n "$APK"
-          test -f "$APK"
+          if [ -z "$APK" ]; then
+            echo "❌ Aucun APK Release trouvé."
+            exit 1
+          fi
 
-          echo "APK Release : $APK"
+          echo "APK trouvé : $APK"
 
-          mkdir -p release
-          cp "$APK" release/SBh-Studio-v1.4.0.apk
+          cp "$APK" \
+            release/SBh-Studio-v1.4.0.apk
+
+          ls -lh release/
 
       # ----------------------------------------------------------
       # SHA256
       # ----------------------------------------------------------
       - name: Générer SHA256
+        shell: bash
         run: |
+          set -euo pipefail
+
           cd release
-          sha256sum SBh-Studio-v1.4.0.apk > SBh-Studio-v1.4.0.apk.sha256
+
+          sha256sum \
+            SBh-Studio-v1.4.0.apk \
+            > SBh-Studio-v1.4.0.apk.sha256
+
+          echo "SHA256 :"
           cat SBh-Studio-v1.4.0.apk.sha256
 
       # ----------------------------------------------------------
-      # Artifact
+      # Artifact Release
       # ----------------------------------------------------------
-      - name: Publier APK Release comme artifact
+      - name: Publier APK Release
         uses: actions/upload-artifact@v4
         with:
           name: SBh-Studio-v1.4.0-release
@@ -230,8 +424,13 @@ jobs:
       # ----------------------------------------------------------
       # GitHub Release
       # ----------------------------------------------------------
-      - name: Créer GitHub Release
-        if: github.event_name == 'push' || inputs.publish_release == true
+      - name: Publier GitHub Release
+        if: >
+          github.event_name == 'push' ||
+          (
+            github.event_name == 'workflow_dispatch' &&
+            inputs.publish_release == true
+          )
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.4.0
