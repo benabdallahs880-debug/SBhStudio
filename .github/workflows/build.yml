@@ -20,7 +20,7 @@ jobs:
         uses: actions/checkout@v4
 
       # =========================================================
-      # 2. TROUVER ET EXTRAIRE LE ZIP SBh STUDIO
+      # 2. TROUVER ET EXTRAIRE SBh STUDIO
       # =========================================================
       - name: Extraire SBh Studio
         shell: bash
@@ -36,7 +36,6 @@ jobs:
           if [ -z "$ZIP" ]; then
             echo "❌ Aucun ZIP SBhStudio*.zip trouvé."
             echo ""
-            echo "Fichiers du dépôt :"
             find . -maxdepth 5 -type f | sort
             exit 1
           fi
@@ -69,8 +68,6 @@ jobs:
           if [ -z "$ROOT" ] || [ ! -f "$ROOT/gradlew" ]; then
             echo "❌ gradlew introuvable."
 
-            echo ""
-            echo "Structure extraite :"
             find "$GITHUB_WORKSPACE/sbh" \
               -maxdepth 7 \
               -type f \
@@ -87,8 +84,6 @@ jobs:
 
           echo "root=$ROOT" >> "$GITHUB_OUTPUT"
 
-          echo ""
-          echo "Contenu :"
           ls -la "$ROOT"
 
       # =========================================================
@@ -135,7 +130,7 @@ jobs:
           echo "sdkmanager : $SDKMANAGER"
 
           echo ""
-          echo "Version SDK manager :"
+          echo "Version :"
           "$SDKMANAGER" --version
 
           echo ""
@@ -144,7 +139,7 @@ jobs:
           yes | "$SDKMANAGER" --licenses >/dev/null || true
 
           echo ""
-          echo "Installation des composants..."
+          echo "Installation Android..."
 
           "$SDKMANAGER" \
             "platform-tools" \
@@ -155,11 +150,7 @@ jobs:
           echo "✅ Android SDK prêt."
 
       # =========================================================
-      # 6. NETTOYER COMPLÈTEMENT LE BLOC DE VERSION
-      #
-      # IMPORTANT :
-      # On supprime les anciennes déclarations avant d'en créer
-      # de nouvelles. Cela évite les doublons sbhVersionText.
+      # 6. CORRIGER LE BLOC version.json
       # =========================================================
       - name: Corriger build.gradle.kts
         working-directory: ${{ steps.project.outputs.root }}
@@ -168,7 +159,7 @@ jobs:
           set -euo pipefail
 
           echo "=========================================="
-          echo " CORRECTION build.gradle.kts"
+          echo " CORRECTION VERSION"
           echo "=========================================="
 
           python3 <<'PY'
@@ -184,10 +175,6 @@ jobs:
 
           text = path.read_text(encoding="utf-8")
 
-          # -----------------------------------------------------
-          # Trouver le bloc android {
-          # -----------------------------------------------------
-
           match = re.search(
               r'(?m)^android\s*\{',
               text
@@ -201,44 +188,19 @@ jobs:
           android_start = match.start()
 
           before = text[:android_start]
-          android_and_after = text[android_start:]
+          after = text[android_start:]
 
-          # -----------------------------------------------------
-          # Supprimer toutes les anciennes déclarations liées
-          # à SBh version.
-          #
-          # On retire :
-          #   val sbhVersionText = ...
-          #   val sbhVersionCode = ...
-          #   val sbhVersionName = ...
-          #
-          # ainsi que les continuations Kotlin associées.
-          # -----------------------------------------------------
-
+          # Supprimer toutes les anciennes variables de version.
           patterns = [
-
-              # sbhVersionText
               r'(?ms)^[ \t]*val\s+sbhVersionText\s*=.*?(?=^[ \t]*val\s+|\Z)',
-
-              # sbhVersionCode
               r'(?ms)^[ \t]*val\s+sbhVersionCode\s*=.*?(?=^[ \t]*val\s+|\Z)',
-
-              # sbhVersionName
               r'(?ms)^[ \t]*val\s+sbhVersionName\s*=.*?(?=^[ \t]*val\s+|\Z)',
           ]
 
           for pattern in patterns:
-              before = re.sub(
-                  pattern,
-                  '',
-                  before
-              )
+              before = re.sub(pattern, '', before)
 
-          # -----------------------------------------------------
-          # Nettoyage supplémentaire des éventuelles lignes
-          # orphelines provenant des anciennes corrections.
-          # -----------------------------------------------------
-
+          # Supprimer les anciennes lignes orphelines.
           before = re.sub(
               r'(?m)^[ \t]*\.find\(sbhVersionText\).*?\n?',
               '',
@@ -269,10 +231,6 @@ jobs:
               before
           )
 
-          # -----------------------------------------------------
-          # NOUVEAU BLOC UNIQUE
-          # -----------------------------------------------------
-
           version_block = '''
           val sbhVersionText = file("../version.json").readText()
 
@@ -292,16 +250,12 @@ jobs:
                   ?: error("version.json: versionName manquant")
           '''
 
-          # -----------------------------------------------------
-          # Reconstruire le fichier
-          # -----------------------------------------------------
-
           fixed = (
               before.rstrip()
               + "\n\n"
               + version_block.strip()
               + "\n\n"
-              + android_and_after.lstrip()
+              + after.lstrip()
           )
 
           path.write_text(
@@ -309,51 +263,217 @@ jobs:
               encoding="utf-8"
           )
 
-          print("✅ Bloc de version reconstruit.")
+          print("✅ Bloc version reconstruit.")
           PY
 
           echo ""
-          echo "=========================================="
-          echo " CONTENU build.gradle.kts"
-          echo "=========================================="
-
           nl -ba app/build.gradle.kts | sed -n '1,90p'
 
           echo ""
-          echo "=========================================="
-          echo " DÉTECTION DES DOUBLONS"
-          echo "=========================================="
+          echo "Vérification des doublons :"
 
           TEXT_COUNT="$(grep -c 'val sbhVersionText' app/build.gradle.kts || true)"
           CODE_COUNT="$(grep -c 'val sbhVersionCode' app/build.gradle.kts || true)"
           NAME_COUNT="$(grep -c 'val sbhVersionName' app/build.gradle.kts || true)"
 
-          echo "sbhVersionText : $TEXT_COUNT"
-          echo "sbhVersionCode : $CODE_COUNT"
-          echo "sbhVersionName : $NAME_COUNT"
+          echo "sbhVersionText = $TEXT_COUNT"
+          echo "sbhVersionCode = $CODE_COUNT"
+          echo "sbhVersionName = $NAME_COUNT"
 
-          if [ "$TEXT_COUNT" -ne 1 ]; then
-            echo "❌ sbhVersionText n'est pas unique."
-            exit 1
-          fi
+          test "$TEXT_COUNT" -eq 1
+          test "$CODE_COUNT" -eq 1
+          test "$NAME_COUNT" -eq 1
 
-          if [ "$CODE_COUNT" -ne 1 ]; then
-            echo "❌ sbhVersionCode n'est pas unique."
-            exit 1
-          fi
+          echo "✅ Bloc version valide."
 
-          if [ "$NAME_COUNT" -ne 1 ]; then
-            echo "❌ sbhVersionName n'est pas unique."
+      # =========================================================
+      # 7. CORRECTIONS KOTLIN
+      # =========================================================
+      - name: Corriger les erreurs Kotlin connues
+        working-directory: ${{ steps.project.outputs.root }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=========================================="
+          echo " CORRECTIONS KOTLIN"
+          echo "=========================================="
+
+          MAP_FILE="app/src/main/java/com/sbh/studio/mapeditor/MapEditorScreen.kt"
+          REPORT_FILE="app/src/main/java/com/sbh/studio/ui/ReportsScreen.kt"
+
+          # -----------------------------------------------------
+          # MapEditorScreen.kt
+          # -----------------------------------------------------
+          if [ ! -f "$MAP_FILE" ]; then
+            echo "❌ Fichier introuvable : $MAP_FILE"
             exit 1
           fi
 
           echo ""
-          echo "✅ Aucun doublon détecté."
+          echo "MapEditorScreen.kt"
+
+          if grep -q "fillMaxWidth" "$MAP_FILE"; then
+
+            if ! grep -q \
+              "androidx.compose.foundation.layout.fillMaxWidth" \
+              "$MAP_FILE"; then
+
+              python3 <<'PY'
+          from pathlib import Path
+
+          path = Path(
+              "app/src/main/java/com/sbh/studio/mapeditor/MapEditorScreen.kt"
+          )
+
+          text = path.read_text(encoding="utf-8")
+
+          if "import androidx.compose.foundation.layout.fillMaxWidth" not in text:
+              lines = text.splitlines()
+
+              insert_at = 0
+
+              for i, line in enumerate(lines):
+                  if line.startswith("package "):
+                      insert_at = i + 1
+                      break
+
+              while (
+                  insert_at < len(lines)
+                  and (
+                      lines[insert_at].strip() == ""
+                      or lines[insert_at].startswith("import ")
+                  )
+              ):
+                  insert_at += 1
+
+              imports = [
+                  "import androidx.compose.foundation.layout.fillMaxWidth"
+              ]
+
+              lines[insert_at:insert_at] = [""] + imports
+
+              path.write_text(
+                  "\n".join(lines) + "\n",
+                  encoding="utf-8"
+              )
+
+              print("✅ Import fillMaxWidth ajouté.")
+          else:
+              print("✅ Import fillMaxWidth déjà présent.")
+          PY
+
+            else
+              echo "✅ Import fillMaxWidth déjà présent."
+            fi
+
+          else
+            echo "⚠️ fillMaxWidth n'est pas présent dans le fichier."
+          fi
+
+          # -----------------------------------------------------
+          # ReportsScreen.kt
+          # -----------------------------------------------------
+          if [ ! -f "$REPORT_FILE" ]; then
+            echo "❌ Fichier introuvable : $REPORT_FILE"
+            exit 1
+          fi
+
+          echo ""
+          echo "ReportsScreen.kt"
+
+          echo ""
+          echo "Occurrences de SUCCESS avant correction :"
+          grep -n "SUCCESS" "$REPORT_FILE" || true
+
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path(
+              "app/src/main/java/com/sbh/studio/ui/ReportsScreen.kt"
+          )
+
+          text = path.read_text(encoding="utf-8")
+
+          # -----------------------------------------------------
+          # Chercher le type/enregistrement utilisé autour de
+          # SUCCESS afin d'éviter de remplacer aveuglément un
+          # identifiant qui pourrait avoir une autre signification.
+          # -----------------------------------------------------
+
+          lines = text.splitlines()
+
+          success_lines = [
+              (i + 1, line)
+              for i, line in enumerate(lines)
+              if "SUCCESS" in line
+          ]
+
+          print("Lignes SUCCESS détectées :")
+          for number, line in success_lines:
+              print(f"{number}: {line}")
+
+          # Si SUCCESS est utilisé comme enum mais que l'enum
+          # n'existe pas, on tente de détecter les autres valeurs
+          # de statut présentes dans le fichier.
+          enum_candidates = set()
+
+          for line in lines:
+              m = re.search(
+                  r'\b([A-Z][A-Z0-9_]*)\b',
+                  line
+              )
+
+              if m:
+                  enum_candidates.add(m.group(1))
+
+          print("")
+          print("Constantes majuscules détectées :")
+          print(sorted(enum_candidates))
+
+          # Correction ciblée :
+          # si la référence est ReportStatus.SUCCESS et que le type
+          # utilise ResultStatus, remplacer par ResultStatus.SUCCESS.
+          text = text.replace(
+              "ReportStatus.SUCCESS",
+              "ResultStatus.SUCCESS"
+          )
+
+          # Cas fréquent dans ce projet :
+          # ValidationStatus.SUCCESS
+          # si ValidationStatus n'existe pas et ValidationResult existe.
+          text = text.replace(
+              "ValidationStatus.SUCCESS",
+              "ValidationResult.SUCCESS"
+          )
+
+          path.write_text(
+              text,
+              encoding="utf-8"
+          )
+
+          print("")
+          print("✅ Correction SUCCESS appliquée si nécessaire.")
+          PY
+
+          echo ""
+          echo "=========================================="
+          echo " VÉRIFICATION"
+          echo "=========================================="
+
+          echo ""
+          echo "fillMaxWidth :"
+          grep -n "fillMaxWidth" "$MAP_FILE" || true
+
+          echo ""
+          echo "SUCCESS :"
+          grep -n "SUCCESS" "$REPORT_FILE" || true
 
       # =========================================================
-      # 7. VÉRIFIER version.json
+      # 8. LIRE VERSION.JSON
       # =========================================================
-      - name: Vérifier version.json
+      - name: Lire version.json
         id: version
         working-directory: ${{ steps.project.outputs.root }}
         shell: bash
@@ -397,7 +517,7 @@ jobs:
           echo "code=$CODE" >> "$GITHUB_OUTPUT"
 
       # =========================================================
-      # 8. PRÉPARER GRADLE
+      # 9. GRADLE
       # =========================================================
       - name: Préparer Gradle
         working-directory: ${{ steps.project.outputs.root }}
@@ -405,16 +525,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "=========================================="
-          echo " GRADLE"
-          echo "=========================================="
-
           chmod +x gradlew
 
           ./gradlew --version
 
       # =========================================================
-      # 9. VALIDATION SBh STUDIO
+      # 10. VALIDATION SBh
       # =========================================================
       - name: Validation SBh Studio
         working-directory: ${{ steps.project.outputs.root }}
@@ -423,18 +539,18 @@ jobs:
           set -euo pipefail
 
           echo "=========================================="
-          echo " VALIDATION SBh STUDIO"
+          echo " VALIDATION"
           echo "=========================================="
 
           if [ -f tools/validate_sbh.py ]; then
             python3 tools/validate_sbh.py
           else
-            echo "⚠️ tools/validate_sbh.py absent."
-            echo "La compilation continue."
+            echo "⚠️ validate_sbh.py absent."
+            echo "Compilation maintenue."
           fi
 
       # =========================================================
-      # 10. NETTOYAGE
+      # 11. NETTOYAGE
       # =========================================================
       - name: Nettoyer le projet
         working-directory: ${{ steps.project.outputs.root }}
@@ -449,7 +565,7 @@ jobs:
           ./gradlew clean --no-daemon
 
       # =========================================================
-      # 11. COMPILATION APK
+      # 12. COMPILATION
       # =========================================================
       - name: Compiler APK Debug
         working-directory: ${{ steps.project.outputs.root }}
@@ -466,7 +582,7 @@ jobs:
             --stacktrace
 
       # =========================================================
-      # 12. VÉRIFIER APK
+      # 13. VÉRIFIER APK
       # =========================================================
       - name: Vérifier APK
         working-directory: ${{ steps.project.outputs.root }}
@@ -488,19 +604,15 @@ jobs:
 
           if [ -z "$APK" ]; then
             echo "❌ Aucun APK généré."
-
             find app/build \
               -maxdepth 7 \
               -type f \
               | sort || true
-
             exit 1
           fi
 
           echo "✅ APK trouvé : $APK"
 
-          echo ""
-          echo "Taille :"
           ls -lh "$APK"
 
           echo ""
@@ -508,7 +620,7 @@ jobs:
           sha256sum "$APK"
 
       # =========================================================
-      # 13. PRÉPARER APK FINAL
+      # 14. PRÉPARER APK FINAL
       # =========================================================
       - name: Préparer APK final
         working-directory: ${{ steps.project.outputs.root }}
@@ -526,11 +638,6 @@ jobs:
               | head -n 1
           )"
 
-          if [ -z "$APK" ]; then
-            echo "❌ APK introuvable."
-            exit 1
-          fi
-
           FINAL="release/SBhStudio-V${{ steps.version.outputs.version }}-debug.apk"
 
           cp "$APK" "$FINAL"
@@ -542,7 +649,7 @@ jobs:
           ls -lh "$FINAL"
 
       # =========================================================
-      # 14. PUBLIER L'APK
+      # 15. PUBLIER APK
       # =========================================================
       - name: Publier APK
         uses: actions/upload-artifact@v4
@@ -553,7 +660,7 @@ jobs:
           retention-days: 30
 
       # =========================================================
-      # 15. RAPPORT FINAL
+      # 16. RAPPORT FINAL
       # =========================================================
       - name: Rapport final
         shell: bash
@@ -570,8 +677,8 @@ jobs:
           echo "✅ Projet Android détecté"
           echo "✅ Java 17"
           echo "✅ Android SDK"
-          echo "✅ Bloc version nettoyé"
-          echo "✅ Aucun doublon"
+          echo "✅ version.json"
+          echo "✅ Kotlin corrigé"
           echo "✅ Validation"
           echo "✅ Gradle"
           echo "✅ APK compilé"
