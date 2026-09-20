@@ -2,13 +2,14 @@ name: Build APK
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [main, master]
   pull_request:
-    branches: [ main, master ]
+    branches: [main, master]
   workflow_dispatch:
     inputs:
       publish_release:
-        description: "Publier une GitHub Release (APK signé)"
+        description: "Publier une GitHub Release avec l'APK signé"
+        required: false
         type: boolean
         default: true
 
@@ -20,332 +21,222 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ═══════════════════════════════════════════════════════════════
-  # 1) Extraire sources + analyser + APK Debug
-  # ═══════════════════════════════════════════════════════════════
+  # ============================================================
+  # 1. Validation + APK Debug
+  # ============================================================
   analyze-and-debug:
-    name: Analyze + Debug APK
+    name: Validate + Debug APK
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Extraire / localiser les sources
-        id: root
+      - name: Vérifier la structure du projet
+        shell: bash
         run: |
           set -euo pipefail
 
-          # Cas 1 : sources déjà à la racine
-          if [ -f gradlew ] && [ -f settings.gradle.kts ]; then
-            echo "project_root=." >> "$GITHUB_OUTPUT"
-            echo "Sources déjà à la racine."
-            exit 0
-          fi
+          echo "=== Vérification SBh Studio ==="
 
-          # Cas 2 : ZIP du projet présent (SBhStudio_*.zip)
-          ZIP=$(find . -maxdepth 2 -type f \( -name 'SBhStudio*.zip' -o -name '*studio*.zip' -o -name '*settlement*.zip' \) | head -1 || true)
-          if [ -n "$ZIP" ]; then
-            echo "Extraction de $ZIP ..."
-            mkdir -p _src
-            unzip -q -o "$ZIP" -d _src
-            FOUND=$(find _src -name gradlew -type f | head -1 || true)
-            if [ -z "$FOUND" ]; then
-              echo "::error::ZIP extrait mais gradlew absent."
-              find _src -maxdepth 6 -type f | head -80
-              exit 1
-            fi
-            DIR=$(dirname "$FOUND")
-            echo "project_root=$DIR" >> "$GITHUB_OUTPUT"
-            echo "Racine Gradle: $DIR"
-            exit 0
-          fi
+          test -f gradlew
+          test -f settings.gradle.kts
+          test -f app/build.gradle.kts
+          test -f version.json
+          test -f tools/validate_sbh.py
 
-          # Cas 3 : gradlew quelque part dans le repo
-          FOUND=$(find . -name gradlew -type f | head -1 || true)
-          if [ -n "$FOUND" ]; then
-            echo "project_root=$(dirname "$FOUND")" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
+          echo "Structure Android détectée."
 
-          echo "::error::Ni sources ni ZIP trouvés."
-          ls -la
-          exit 1
+      - name: Donner les droits à Gradle
+        run: chmod +x gradlew
 
-      - name: Vérifier la structure
-        working-directory: ${{ steps.root.outputs.project_root }}
-        run: |
-          set -euo pipefail
-          echo "== Structure dans $(pwd) =="
-          for f in gradlew settings.gradle.kts build.gradle.kts app/build.gradle.kts version.json app/src/main/AndroidManifest.xml; do
-            test -e "$f" || { echo "MANQUANT: $f"; ls -la; exit 1; }
-            echo "OK  $f"
-          done
-          for f in \
-            app/src/main/java/com/sbh/studio/MainActivity.kt \
-            app/src/main/java/com/sbh/studio/settlement/SettlementScreen.kt \
-            app/src/main/java/com/sbh/studio/settlement/SettlementRepository.kt \
-            app/src/main/java/com/sbh/studio/mapeditor/MapEditorScreen.kt \
-            app/src/main/assets/mapstudio.html
-          do
-            test -e "$f" || { echo "MANQUANT: $f"; exit 1; }
-            echo "OK  $f"
-          done
-          echo "Structure validée."
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
+      - name: Installer Python
+        uses: actions/setup-python@v5
         with:
-          java-version: "17"
-          distribution: "temurin"
-          cache: gradle
+          python-version: "3.x"
 
-      # Pas de package "tools" (supprimé par Google)
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          packages: |
-            platform-tools
-            platforms;android-35
-            build-tools;35.0.0
+      - name: Validation statique SBh Studio
+        run: |
+          python3 tools/validate_sbh.py
 
-      - name: Accepter les licences SDK
+      - name: Vérifier la version
+        shell: bash
         run: |
           set -euo pipefail
-          SDK="\( {ANDROID_SDK_ROOT:- \){ANDROID_HOME:-}}"
-          if [ -z "$SDK" ]; then
-            echo "ANDROID_SDK_ROOT non défini, on continue"
-            exit 0
-          fi
-          mkdir -p "$SDK/licenses"
-          echo -e "24333f8a63b6825ea9c5514f83c2829b004d1fee\n" > "$SDK/licenses/android-sdk-license"
-          echo -e "84831b9409646a918e30573bab4c9c91346d8abd\n" > "$SDK/licenses/android-sdk-preview-license"
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
 
-      - name: Sync version.json → Gradle + assets
-        working-directory: ${{ steps.root.outputs.project_root }}
-        run: |
-          set -euo pipefail
-          CODE=$(python3 -c 'import json; print(json.load(open("version.json"))["versionCode"])')
-          NAME=$(python3 -c 'import json; print(json.load(open("version.json"))["versionName"])')
-          echo "VERSION_CODE=$CODE" >> "$GITHUB_ENV"
-          echo "VERSION_NAME=$NAME" >> "$GITHUB_ENV"
-          python3 << 'PY'
-          from pathlib import Path
-          import re, json
-          v = json.load(open("version.json", encoding="utf-8"))
-          code, name = int(v["versionCode"]), str(v["versionName"])
-          g = Path("app/build.gradle.kts")
-          t = g.read_text(encoding="utf-8")
-          t = re.sub(r"versionCode\s*=\s*\d+", f"versionCode = {code}", t)
-          t = re.sub(r'versionName\s*=\s*"[^"]*"', f'versionName = "{name}"', t)
-          g.write_text(t, encoding="utf-8")
-          Path("app/src/main/assets").mkdir(parents=True, exist_ok=True)
-          Path("app/src/main/assets/version.json").write_text(
-              json.dumps(v, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-          )
-          print(f"Synced versionCode={code} versionName={name}")
+          VERSION_NAME=$(python3 - <<'PY'
+          import json
+          with open("version.json", encoding="utf-8") as f:
+              print(json.load(f)["versionName"])
           PY
+          )
 
-      - name: local.properties (sdk.dir)
-        working-directory: ${{ steps.root.outputs.project_root }}
+          VERSION_CODE=$(python3 - <<'PY'
+          import json
+          with open("version.json", encoding="utf-8") as f:
+              print(json.load(f)["versionCode"])
+          PY
+          )
+
+          echo "SBh Studio version: ${VERSION_NAME}"
+          echo "Version code: ${VERSION_CODE}"
+
+          test "$VERSION_NAME" = "1.4.0"
+          test "$VERSION_CODE" = "29"
+
+      - name: Configuration Android
+        uses: android-actions/setup-android@v3
+
+      - name: Nettoyage Gradle
+        run: ./gradlew clean --no-daemon
+
+      - name: Build APK Debug
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Vérifier APK Debug
+        shell: bash
         run: |
           set -euo pipefail
-          SDK="\( {ANDROID_SDK_ROOT:- \){ANDROID_HOME:-}}"
-          if [ -n "$SDK" ]; then
-            echo "sdk.dir=$SDK" > local.properties
-            echo "local.properties → sdk.dir=$SDK"
-          else
-            echo "::warning::ANDROID_HOME absent"
-          fi
 
-      - name: gradlew exécutable
-        working-directory: ${{ steps.root.outputs.project_root }}
-        run: chmod +x ./gradlew
+          APK="app/build/outputs/apk/debug/app-debug.apk"
 
-      - name: Compile Debug
-        working-directory: ${{ steps.root.outputs.project_root }}
-        run: ./gradlew assembleDebug --stacktrace --no-daemon
+          test -f "$APK"
 
-      - name: Upload Debug APK
+          echo "APK Debug trouvé : $APK"
+          ls -lh "$APK"
+
+      - name: Publier APK Debug comme artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SBhStudio-debug-${{ env.VERSION_NAME }}
-          path: ${{ steps.root.outputs.project_root }}/app/build/outputs/apk/debug/*.apk
-          retention-days: 14
+          name: SBh-Studio-${{ github.sha }}-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
-  # ═══════════════════════════════════════════════════════════════
-  # 2) Release signée (si secrets présents)
-  # ═══════════════════════════════════════════════════════════════
+  # ============================================================
+  # 2. APK Release signé
+  # ============================================================
   release:
-    name: Signed Release APK
+    name: Build Release APK
     needs: analyze-and-debug
+    if: >
+      github.event_name == 'push' ||
+      (
+        github.event_name == 'workflow_dispatch' &&
+        inputs.publish_release == true
+      )
+
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Extraire / localiser les sources
-        id: root
-        run: |
-          set -euo pipefail
-          if [ -f gradlew ] && [ -f settings.gradle.kts ]; then
-            echo "project_root=." >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          ZIP=$(find . -maxdepth 2 -type f \( -name 'SBhStudio*.zip' -o -name '*studio*.zip' -o -name '*settlement*.zip' \) | head -1 || true)
-          if [ -n "$ZIP" ]; then
-            mkdir -p _src
-            unzip -q -o "$ZIP" -d _src
-            FOUND=$(find _src -name gradlew -type f | head -1)
-            echo "project_root=$(dirname "$FOUND")" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          FOUND=$(find . -name gradlew -type f | head -1 || true)
-          test -n "$FOUND"
-          echo "project_root=$(dirname "$FOUND")" >> "$GITHUB_OUTPUT"
+      - name: Donner les droits à Gradle
+        run: chmod +x gradlew
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
+      - name: Installer Python
+        uses: actions/setup-python@v5
         with:
-          java-version: "17"
-          distribution: "temurin"
-          cache: gradle
+          python-version: "3.x"
 
-      - name: Setup Android SDK
+      - name: Validation SBh Studio
+        run: python3 tools/validate_sbh.py
+
+      - name: Configuration Android
         uses: android-actions/setup-android@v3
-        with:
-          packages: |
-            platform-tools
-            platforms;android-35
-            build-tools;35.0.0
 
-      - name: Accepter les licences SDK
-        run: |
-          set -euo pipefail
-          SDK="\( {ANDROID_SDK_ROOT:- \){ANDROID_HOME:-}}"
-          if [ -z "$SDK" ]; then exit 0; fi
-          mkdir -p "$SDK/licenses"
-          echo -e "24333f8a63b6825ea9c5514f83c2829b004d1fee\n" > "$SDK/licenses/android-sdk-license"
-          echo -e "84831b9409646a918e30573bab4c9c91346d8abd\n" > "$SDK/licenses/android-sdk-preview-license"
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
-
-      - name: Sync version.json → Gradle + assets
-        working-directory: ${{ steps.root.outputs.project_root }}
-        run: |
-          set -euo pipefail
-          CODE=$(python3 -c 'import json; print(json.load(open("version.json"))["versionCode"])')
-          NAME=$(python3 -c 'import json; print(json.load(open("version.json"))["versionName"])')
-          echo "VERSION_CODE=$CODE" >> "$GITHUB_ENV"
-          echo "VERSION_NAME=$NAME" >> "$GITHUB_ENV"
-          python3 << 'PY'
-          from pathlib import Path
-          import re, json
-          v = json.load(open("version.json", encoding="utf-8"))
-          code, name = int(v["versionCode"]), str(v["versionName"])
-          g = Path("app/build.gradle.kts")
-          t = g.read_text(encoding="utf-8")
-          t = re.sub(r"versionCode\s*=\s*\d+", f"versionCode = {code}", t)
-          t = re.sub(r'versionName\s*=\s*"[^"]*"', f'versionName = "{name}"', t)
-          g.write_text(t, encoding="utf-8")
-          Path("app/src/main/assets").mkdir(parents=True, exist_ok=True)
-          Path("app/src/main/assets/version.json").write_text(
-              json.dumps(v, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-          )
-          PY
-
-      - name: local.properties (sdk.dir)
-        working-directory: ${{ steps.root.outputs.project_root }}
-        run: |
-          set -euo pipefail
-          SDK="\( {ANDROID_SDK_ROOT:- \){ANDROID_HOME:-}}"
-          if [ -n "$SDK" ]; then
-            echo "sdk.dir=$SDK" > local.properties
-          fi
-
-      - name: gradlew exécutable
-        working-directory: ${{ steps.root.outputs.project_root }}
-        run: chmod +x ./gradlew
-
-      - name: Vérifier secrets de signature
-        id: secrets
-        env:
-          SBH_KEYSTORE_B64: ${{ secrets.SBH_KEYSTORE_B64 }}
-          SBH_KEYSTORE_PASSWORD: ${{ secrets.SBH_KEYSTORE_PASSWORD }}
-          SBH_KEY_ALIAS: ${{ secrets.SBH_KEY_ALIAS }}
-          SBH_KEY_PASSWORD: ${{ secrets.SBH_KEY_PASSWORD }}
-        run: |
-          if [ -n "\( {SBH_KEYSTORE_B64:-}" ] && [ -n " \){SBH_KEYSTORE_PASSWORD:-}" ] && [ -n "\( {SBH_KEY_ALIAS:-}" ] && [ -n " \){SBH_KEY_PASSWORD:-}" ]; then
-            echo "has_signing=true" >> "$GITHUB_OUTPUT"
-            echo "Secrets de signature OK."
-          else
-            echo "has_signing=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Secrets absents — pas de release signée (debug déjà disponible)."
-          fi
-
-      - name: Préparer le keystore
-        if: steps.secrets.outputs.has_signing == 'true'
+      # ----------------------------------------------------------
+      # Signature Android
+      # ----------------------------------------------------------
+      - name: Préparer la clé de signature
         env:
           SBH_KEYSTORE_B64: ${{ secrets.SBH_KEYSTORE_B64 }}
         run: |
           set -euo pipefail
+
+          test -n "$SBH_KEYSTORE_B64"
+
           echo "$SBH_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/sbh-release.keystore"
-          echo "SBH_KEYSTORE_PATH=$RUNNER_TEMP/sbh-release.keystore" >> "$GITHUB_ENV"
 
-      - name: Build Release signée
-        if: steps.secrets.outputs.has_signing == 'true'
-        working-directory: ${{ steps.root.outputs.project_root }}
+          test -s "$RUNNER_TEMP/sbh-release.keystore"
+
+      - name: Vérifier les secrets de signature
         env:
           SBH_KEYSTORE_PASSWORD: ${{ secrets.SBH_KEYSTORE_PASSWORD }}
           SBH_KEY_ALIAS: ${{ secrets.SBH_KEY_ALIAS }}
           SBH_KEY_PASSWORD: ${{ secrets.SBH_KEY_PASSWORD }}
-        run: ./gradlew assembleRelease --stacktrace --no-daemon
+        run: |
+          set -euo pipefail
 
-      - name: Upload Release APK
-        if: steps.secrets.outputs.has_signing == 'true'
+          test -n "$SBH_KEYSTORE_PASSWORD"
+          test -n "$SBH_KEY_ALIAS"
+          test -n "$SBH_KEY_PASSWORD"
+
+          echo "Secrets de signature présents."
+
+      # ----------------------------------------------------------
+      # Build Release
+      # ----------------------------------------------------------
+      - name: Build APK Release signé
+        env:
+          SBH_KEYSTORE_FILE: ${{ runner.temp }}/sbh-release.keystore
+          SBH_KEYSTORE_PASSWORD: ${{ secrets.SBH_KEYSTORE_PASSWORD }}
+          SBH_KEY_ALIAS: ${{ secrets.SBH_KEY_ALIAS }}
+          SBH_KEY_PASSWORD: ${{ secrets.SBH_KEY_PASSWORD }}
+        run: |
+          ./gradlew assembleRelease \
+            --no-daemon \
+            --stacktrace
+
+      - name: Vérifier APK Release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK=$(find app/build/outputs/apk/release \
+            -type f \
+            -name "*.apk" \
+            | head -n 1)
+
+          test -n "$APK"
+          test -f "$APK"
+
+          echo "APK Release : $APK"
+
+          mkdir -p release
+          cp "$APK" release/SBh-Studio-v1.4.0.apk
+
+      # ----------------------------------------------------------
+      # SHA256
+      # ----------------------------------------------------------
+      - name: Générer SHA256
+        run: |
+          cd release
+          sha256sum SBh-Studio-v1.4.0.apk > SBh-Studio-v1.4.0.apk.sha256
+          cat SBh-Studio-v1.4.0.apk.sha256
+
+      # ----------------------------------------------------------
+      # Artifact
+      # ----------------------------------------------------------
+      - name: Publier APK Release comme artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SBhStudio-release-${{ env.VERSION_NAME }}
-          path: ${{ steps.root.outputs.project_root }}/app/build/outputs/apk/release/*.apk
-          retention-days: 30
+          name: SBh-Studio-v1.4.0-release
+          path: |
+            release/SBh-Studio-v1.4.0.apk
+            release/SBh-Studio-v1.4.0.apk.sha256
           if-no-files-found: error
 
-      - name: Préparer fichiers de release
-        if: steps.secrets.outputs.has_signing == 'true'
-        working-directory: ${{ steps.root.outputs.project_root }}
-        run: |
-          set -euo pipefail
-          APK=$(find app/build/outputs/apk/release -maxdepth 1 -name '*.apk' -print -quit)
-          test -n "$APK"
-          cp "$APK" "\( GITHUB_WORKSPACE/SBhStudio- \){VERSION_NAME}.apk"
-          cp version.json "\( GITHUB_WORKSPACE/version- \){VERSION_NAME}.json"
-          SHA256=$(sha256sum "\( GITHUB_WORKSPACE/SBhStudio- \){VERSION_NAME}.apk" | awk '{print $1}')
-          echo "APK_SHA256=$SHA256" >> "$GITHUB_ENV"
-          python3 << PY
-          import json, os
-          v = json.load(open("version.json", encoding="utf-8"))
-          v["sha256"] = os.environ["APK_SHA256"]
-          v["apkUrl"] = f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/download/v{os.environ['VERSION_NAME']}/SBhStudio-{os.environ['VERSION_NAME']}.apk"
-          open(os.environ["GITHUB_WORKSPACE"] + "/release-body.json", "w", encoding="utf-8").write(
-              json.dumps(v, ensure_ascii=False, indent=2) + "\n"
-          )
-          print("release-body.json ready; sha256=", v["sha256"])
-          PY
-
-      - name: Publier GitHub Release
-        if: |
-          steps.secrets.outputs.has_signing == 'true' &&
-          (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish_release))
+      # ----------------------------------------------------------
+      # GitHub Release
+      # ----------------------------------------------------------
+      - name: Créer GitHub Release
+        if: github.event_name == 'push' || inputs.publish_release == true
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ env.VERSION_NAME }}
-          name: SBh Studio v${{ env.VERSION_NAME }}
-          body_path: release-body.json
+          tag_name: v1.4.0
+          name: SBh Studio v1.4.0
+          generate_release_notes: true
           files: |
-            SBhStudio-${{ env.VERSION_NAME }}.apk
-            version-${{ env.VERSION_NAME }}.json
-          make_latest: true
-          fail_on_unmatched_files: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            release/SBh-Studio-v1.4.0.apk
+            release/SBh-Studio-v1.4.0.apk.sha256
