@@ -12,70 +12,358 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
+      # =========================================================
+      # 1. RÉCUPÉRATION DU DÉPÔT
+      # =========================================================
       - name: Checkout
         uses: actions/checkout@v4
 
+      # =========================================================
+      # 2. RECHERCHE ET EXTRACTION DU ZIP SBH STUDIO
+      # =========================================================
       - name: Extraire SBh Studio
+        shell: bash
         run: |
-          ZIP=$(find . -maxdepth 1 -type f -name 'SBhStudio*.zip' | sort | head -n 1)
-          test -n "$ZIP"
-          echo "ZIP trouvé : $ZIP"
+          set -euo pipefail
+
+          echo "=========================================="
+          echo " EXTRACTION SBh STUDIO"
+          echo "=========================================="
+
+          ZIP="$(find . -maxdepth 2 -type f -iname 'SBhStudio*.zip' | sort | head -n 1)"
+
+          if [ -z "$ZIP" ]; then
+            echo "❌ Aucun ZIP SBh Studio trouvé."
+            echo ""
+            echo "Fichiers présents :"
+            find . -maxdepth 3 -type f | sort
+            exit 1
+          fi
+
+          echo "✅ ZIP trouvé : $ZIP"
+
+          rm -rf sbh
+          mkdir -p sbh
+
           unzip -q "$ZIP" -d sbh
-          find sbh -name gradlew -type f | head
 
-      - name: Trouver le projet
+          echo ""
+          echo "Projet extrait."
+
+          echo ""
+          echo "Recherche de gradlew :"
+
+          find sbh -type f -name "gradlew" -print
+
+      # =========================================================
+      # 3. DÉTECTION AUTOMATIQUE DU VRAI DOSSIER PROJET
+      # =========================================================
+      - name: Détecter le projet Android
         id: project
+        shell: bash
         run: |
-          ROOT=$(dirname "$(find "$GITHUB_WORKSPACE/sbh" -name gradlew -type f | head -n 1)")
-          test -n "$ROOT"
-          echo "root=$ROOT" >> "$GITHUB_OUTPUT"
-          echo "Projet trouvé : $ROOT"
+          set -euo pipefail
 
-      - name: Java 17
+          ROOT="$(dirname "$(find "$GITHUB_WORKSPACE/sbh" -type f -name 'gradlew' -print -quit)")"
+
+          if [ -z "$ROOT" ] || [ ! -f "$ROOT/gradlew" ]; then
+            echo "❌ Impossible de trouver le projet Android."
+            echo ""
+            echo "Structure trouvée :"
+            find "$GITHUB_WORKSPACE/sbh" -maxdepth 5 -type f | sort
+            exit 1
+          fi
+
+          echo "=========================================="
+          echo " PROJET ANDROID DÉTECTÉ"
+          echo "=========================================="
+          echo "$ROOT"
+
+          echo "root=$ROOT" >> "$GITHUB_OUTPUT"
+
+          echo ""
+          echo "Contenu du projet :"
+          ls -la "$ROOT"
+
+      # =========================================================
+      # 4. JAVA 17
+      # =========================================================
+      - name: Installer Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Android SDK
-        uses: android-actions/setup-android@v4
-        with:
-          packages: platform-tools
+      # =========================================================
+      # 5. ANDROID SDK
+      # =========================================================
+      - name: Installer Android SDK
+        uses: android-actions/setup-android@v3
 
+      # =========================================================
+      # 6. OUTILS ANDROID NÉCESSAIRES
+      # =========================================================
+      - name: Installer les composants Android nécessaires
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=========================================="
+          echo " ANDROID SDK"
+          echo "=========================================="
+
+          sdkmanager --version
+
+          yes | sdkmanager --licenses >/dev/null || true
+
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+      # =========================================================
+      # 7. CORRECTION DU PARSING version.json
+      # =========================================================
+      - name: Corriger le parsing Kotlin de version.json
+        working-directory: ${{ steps.project.outputs.root }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=========================================="
+          echo " CORRECTION build.gradle.kts"
+          echo "=========================================="
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("app/build.gradle.kts")
+
+          if not path.exists():
+              raise SystemExit("❌ app/build.gradle.kts introuvable")
+
+          text = path.read_text()
+
+          lines = text.splitlines()
+
+          result = []
+          skip = False
+
+          for line in lines:
+              stripped = line.strip()
+
+              if stripped.startswith("val sbhVersionCode = Regex("):
+                  result.append(
+                      'val sbhVersionCode = Regex("""["]versionCode["]\\s*:\\s*(\\d+)""")'
+                  )
+                  skip = False
+                  continue
+
+              if stripped.startswith("val sbhVersionName = Regex("):
+                  result.append(
+                      'val sbhVersionName = Regex("""["]versionName["]\\s*:\\s*["]([^"]+)["]""")'
+                  )
+                  skip = False
+                  continue
+
+              result.append(line)
+
+          fixed = "\n".join(result) + "\n"
+
+          path.write_text(fixed)
+
+          print("✅ build.gradle.kts corrigé")
+          PY
+
+          echo ""
+          echo "Extrait du fichier :"
+          nl -ba app/build.gradle.kts | sed -n '1,45p'
+
+      # =========================================================
+      # 8. VÉRIFICATION version.json
+      # =========================================================
+      - name: Vérifier version.json
+        id: version
+        working-directory: ${{ steps.project.outputs.root }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=========================================="
+          echo " VERSION SBh STUDIO"
+          echo "=========================================="
+
+          if [ ! -f version.json ]; then
+            echo "❌ version.json introuvable"
+            exit 1
+          fi
+
+          cat version.json
+
+          VERSION="$(python3 -c 'import json; print(json.load(open("version.json"))["versionName"])')"
+
+          CODE="$(python3 -c 'import json; print(json.load(open("version.json"))["versionCode"])')"
+
+          echo ""
+          echo "Version : $VERSION"
+          echo "Code    : $CODE"
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+
+      # =========================================================
+      # 9. PERMISSION GRADLE
+      # =========================================================
       - name: Préparer Gradle
         working-directory: ${{ steps.project.outputs.root }}
-        run: chmod +x gradlew
-
-      - name: Vérifier la version
-        working-directory: ${{ steps.project.outputs.root }}
+        shell: bash
         run: |
-          echo "=== Version ==="
-          cat version.json
-          echo "=============="
+          set -euo pipefail
 
-      - name: Validation SBh
+          chmod +x gradlew
+
+          echo "Gradle :"
+          ./gradlew --version
+
+      # =========================================================
+      # 10. VALIDATION SBH
+      # =========================================================
+      - name: Validation SBh Studio
         working-directory: ${{ steps.project.outputs.root }}
+        shell: bash
         run: |
+          set -euo pipefail
+
+          echo "=========================================="
+          echo " VALIDATION SBh STUDIO"
+          echo "=========================================="
+
           if [ -f tools/validate_sbh.py ]; then
             python3 tools/validate_sbh.py
           else
-            echo "Validateur absent, compilation maintenue."
+            echo "⚠️ tools/validate_sbh.py absent."
+            echo "La compilation continue."
           fi
 
+      # =========================================================
+      # 11. NETTOYAGE GRADLE
+      # =========================================================
+      - name: Nettoyer le projet
+        working-directory: ${{ steps.project.outputs.root }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ./gradlew clean --no-daemon
+
+      # =========================================================
+      # 12. COMPILATION APK DEBUG
+      # =========================================================
       - name: Compiler APK Debug
         working-directory: ${{ steps.project.outputs.root }}
-        run: ./gradlew assembleDebug --no-daemon --stacktrace
+        shell: bash
+        run: |
+          set -euo pipefail
 
+          echo "=========================================="
+          echo " BUILD APK DEBUG"
+          echo "=========================================="
+
+          ./gradlew assembleDebug \
+            --no-daemon \
+            --stacktrace
+
+      # =========================================================
+      # 13. VÉRIFICATION APK
+      # =========================================================
       - name: Vérifier APK
         working-directory: ${{ steps.project.outputs.root }}
+        shell: bash
         run: |
-          echo "=== APK généré ==="
-          find app/build/outputs/apk/debug -type f -name "*.apk" -print
-          test -n "$(find app/build/outputs/apk/debug -type f -name '*.apk' -print -quit)"
+          set -euo pipefail
 
-      - name: Récupérer APK
+          echo "=========================================="
+          echo " APK GÉNÉRÉ"
+          echo "=========================================="
+
+          APK="$(find app/build/outputs/apk/debug \
+            -type f \
+            -name '*.apk' \
+            -print -quit)"
+
+          if [ -z "$APK" ]; then
+            echo "❌ Aucun APK généré."
+            exit 1
+          fi
+
+          echo "✅ APK trouvé :"
+          echo "$APK"
+
+          echo ""
+          echo "Taille :"
+          ls -lh "$APK"
+
+          echo ""
+          echo "SHA256 :"
+          sha256sum "$APK"
+
+      # =========================================================
+      # 14. RENOMMER L'APK
+      # =========================================================
+      - name: Préparer APK final
+        id: apk
+        working-directory: ${{ steps.project.outputs.root }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p release
+
+          APK="$(find app/build/outputs/apk/debug \
+            -type f \
+            -name '*.apk' \
+            -print -quit)"
+
+          FINAL="release/SBhStudio-V${{ steps.version.outputs.version }}-debug.apk"
+
+          cp "$APK" "$FINAL"
+
+          echo "APK final : $FINAL"
+
+          ls -lh release/
+
+          echo "path=$FINAL" >> "$GITHUB_OUTPUT"
+
+      # =========================================================
+      # 15. PUBLIER LE VRAI APK COMME ARTIFACT
+      # =========================================================
+      - name: Télécharger l'APK
         uses: actions/upload-artifact@v4
         with:
-          name: SBh-Studio-V1.4.0-debug
-          path: ${{ steps.project.outputs.root }}/app/build/outputs/apk/debug/*.apk
+          name: SBh-Studio-V${{ steps.version.outputs.version }}-APK
+          path: ${{ steps.project.outputs.root }}/release/SBhStudio-V${{ steps.version.outputs.version }}-debug.apk
           if-no-files-found: error
+          retention-days: 30
+
+      # =========================================================
+      # 16. RAPPORT FINAL
+      # =========================================================
+      - name: Rapport final
+        shell: bash
+        run: |
+          echo ""
+          echo "=========================================="
+          echo " SBh STUDIO - BUILD TERMINÉ"
+          echo "=========================================="
+          echo ""
+          echo "Version : ${{ steps.version.outputs.version }}"
+          echo "Code    : ${{ steps.version.outputs.code }}"
+          echo ""
+          echo "✅ Compilation APK réussie"
+          echo "✅ APK publié dans les Artifacts GitHub"
+          echo ""
+          echo "Nom :"
+          echo "SBhStudio-V${{ steps.version.outputs.version }}-debug.apk"
+          echo ""
+          echo "=========================================="
