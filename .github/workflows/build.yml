@@ -18,7 +18,7 @@ jobs:
     steps:
 
       # ============================================================
-      # 1. RÉCUPÉRER LE PROJET
+      # 1. RÉCUPÉRER LE DÉPÔT
       # ============================================================
       - name: Checkout
         uses: actions/checkout@v4
@@ -33,65 +33,127 @@ jobs:
           java-version: "17"
 
       # ============================================================
-      # 3. DÉTECTER LE PROJET ANDROID
+      # 3. TROUVER ET EXTRAIRE SBH STUDIO
       # ============================================================
-      - name: Détecter le projet Android
-        id: project
+      - name: Extraire le projet SBh Studio
+        id: extract
         shell: bash
         run: |
           set -euo pipefail
 
           echo "=========================================="
-          echo " RECHERCHE DU PROJET ANDROID"
+          echo " RECHERCHE DU PROJET SBH STUDIO"
           echo "=========================================="
 
-          if [ -f "$GITHUB_WORKSPACE/gradlew" ]; then
-            ROOT="$GITHUB_WORKSPACE"
-          else
-            GRADLEW="$(find "$GITHUB_WORKSPACE" \
+          ZIP=""
+
+          # Chercher le ZIP principal SBh Studio
+          ZIP="$(find "$GITHUB_WORKSPACE" \
+            -maxdepth 2 \
+            -type f \
+            -iname 'SBhStudio*.zip' \
+            -print \
+            | head -n 1)"
+
+          if [ -z "$ZIP" ]; then
+            echo "❌ Aucun ZIP SBh Studio trouvé."
+
+            echo ""
+            echo "===== FICHIERS DU DÉPÔT ====="
+
+            find "$GITHUB_WORKSPACE" \
+              -maxdepth 4 \
               -type f \
-              -name gradlew \
               -print \
-              -quit)"
+              | sort \
+              | head -n 1000
 
-            if [ -z "$GRADLEW" ]; then
-              echo "❌ gradlew introuvable."
-
-              echo ""
-              echo "===== RACINE DU DÉPÔT ====="
-              find "$GITHUB_WORKSPACE" \
-                -maxdepth 3 \
-                -type f \
-                | sort \
-                | head -n 500
-
-              exit 1
-            fi
-
-            ROOT="$(dirname "$GRADLEW")"
-          fi
-
-          echo ""
-          echo "✅ Projet Android trouvé :"
-          echo "$ROOT"
-
-          if [ ! -f "$ROOT/settings.gradle" ] &&
-             [ ! -f "$ROOT/settings.gradle.kts" ]; then
-            echo "⚠️ settings.gradle(.kts) introuvable à la racine détectée."
-          fi
-
-          if [ ! -d "$ROOT/app" ]; then
-            echo "❌ Dossier app/ introuvable."
             exit 1
           fi
 
+          echo "✅ Archive trouvée :"
+          echo "$ZIP"
+
+          BUILD_DIR="$GITHUB_WORKSPACE/.sbh-build"
+
+          rm -rf "$BUILD_DIR"
+          mkdir -p "$BUILD_DIR"
+
+          echo ""
+          echo "Extraction..."
+
+          unzip -q "$ZIP" -d "$BUILD_DIR"
+
+          echo "✅ Archive extraite."
+
+          echo ""
+          echo "===== CONTENU EXTRAIT ====="
+
+          find "$BUILD_DIR" \
+            -maxdepth 5 \
+            -type f \
+            | sort \
+            | head -n 1000
+
+          # --------------------------------------------------------
+          # Trouver le gradlew réel à l'intérieur de l'archive
+          # --------------------------------------------------------
+
+          GRADLEW="$(find "$BUILD_DIR" \
+            -type f \
+            -name gradlew \
+            -print \
+            -quit)"
+
+          if [ -z "$GRADLEW" ]; then
+            echo ""
+            echo "❌ gradlew introuvable après extraction."
+
+            echo ""
+            echo "===== ARBORESCENCE COMPLÈTE ====="
+
+            find "$BUILD_DIR" \
+              -maxdepth 8 \
+              -print \
+              | sort \
+              | head -n 2000
+
+            exit 1
+          fi
+
+          ROOT="$(dirname "$GRADLEW")"
+
+          echo ""
+          echo "=========================================="
+          echo " PROJET ANDROID TROUVÉ"
+          echo "=========================================="
+          echo "$ROOT"
+
+          if [ ! -f "$ROOT/gradlew" ]; then
+            echo "❌ gradlew absent."
+            exit 1
+          fi
+
+          if [ ! -f "$ROOT/settings.gradle" ] &&
+             [ ! -f "$ROOT/settings.gradle.kts" ]; then
+            echo "⚠️ settings.gradle(.kts) absent."
+          fi
+
+          if [ ! -d "$ROOT/app" ]; then
+            echo "❌ Dossier app/ absent."
+            exit 1
+          fi
+
+          chmod +x "$ROOT/gradlew"
+
+          echo ""
           echo "root=$ROOT" >> "$GITHUB_OUTPUT"
 
       # ============================================================
       # 4. DIAGNOSTIC STRUCTURE
       # ============================================================
-      - name: Diagnostiquer la structure
-        working-directory: ${{ steps.project.outputs.root }}
+      - name: Diagnostiquer le projet
+        working-directory: ${{ steps.extract.outputs.root }}
         shell: bash
         run: |
           set -euo pipefail
@@ -101,24 +163,28 @@ jobs:
           echo "=========================================="
 
           echo ""
-          echo "Racine :"
+          echo "Projet :"
           pwd
 
           echo ""
           echo "Fichiers Gradle :"
+
           find . \
-            -maxdepth 4 \
-            \( -name "build.gradle" \
-            -o -name "build.gradle.kts" \
-            -o -name "settings.gradle" \
-            -o -name "settings.gradle.kts" \
-            -o -name "gradle-wrapper.properties" \) \
+            -maxdepth 5 \
+            \
+              -name "build.gradle" \
+              -o -name "build.gradle.kts" \
+              -o -name "settings.gradle" \
+              -o -name "settings.gradle.kts" \
+              -o -name "gradle-wrapper.properties" \
+            \
             -print \
             | sort
 
           echo ""
-          echo "Gradle wrapper :"
-          ls -la gradlew || true
+          echo "Wrapper :"
+
+          ls -lh gradlew
 
       # ============================================================
       # 5. ANDROID SDK
@@ -144,15 +210,16 @@ jobs:
 
           echo ""
           echo "Version sdkmanager :"
+
           "$SDKMANAGER" --version
 
           echo ""
-          echo "Acceptation des licences Android..."
+          echo "Acceptation des licences..."
 
           yes | "$SDKMANAGER" --licenses >/dev/null || true
 
           echo ""
-          echo "Installation des composants nécessaires..."
+          echo "Installation SDK..."
 
           "$SDKMANAGER" \
             "platform-tools" \
@@ -167,13 +234,21 @@ jobs:
       # ============================================================
       - name: Vérifier version.json
         id: version
-        working-directory: ${{ steps.project.outputs.root }}
+        working-directory: ${{ steps.extract.outputs.root }}
         shell: bash
         run: |
           set -euo pipefail
 
           if [ ! -f "version.json" ]; then
             echo "❌ version.json absent."
+
+            echo ""
+            echo "Recherche de version.json :"
+
+            find . \
+              -name "version.json" \
+              -print
+
             exit 1
           fi
 
@@ -185,7 +260,9 @@ jobs:
           path = Path("version.json")
 
           data = json.loads(
-              path.read_text(encoding="utf-8")
+              path.read_text(
+                  encoding="utf-8"
+              )
           )
 
           if "versionName" not in data:
@@ -198,26 +275,41 @@ jobs:
                   "❌ versionCode absent de version.json"
               )
 
-          version_name = str(data["versionName"])
-          version_code = int(data["versionCode"])
+          version_name = str(
+              data["versionName"]
+          )
 
-          print(f"Version SBh Studio : {version_name}")
-          print(f"Version Code      : {version_code}")
+          version_code = int(
+              data["versionCode"]
+          )
+
+          print(
+              f"Version SBh Studio : {version_name}"
+          )
+
+          print(
+              f"Version Code      : {version_code}"
+          )
 
           with open(
               os.environ["GITHUB_OUTPUT"],
               "a",
               encoding="utf-8"
           ) as f:
-              f.write(f"version={version_name}\n")
-              f.write(f"code={version_code}\n")
+              f.write(
+                  f"version={version_name}\n"
+              )
+
+              f.write(
+                  f"code={version_code}\n"
+              )
           PY
 
       # ============================================================
-      # 7. CORRECTION GRADLE VERSION
+      # 7. CORRECTION build.gradle.kts
       # ============================================================
       - name: Vérifier et corriger build.gradle.kts
-        working-directory: ${{ steps.project.outputs.root }}
+        working-directory: ${{ steps.extract.outputs.root }}
         shell: bash
         run: |
           set -euo pipefail
@@ -233,7 +325,9 @@ jobs:
           from pathlib import Path
           import re
 
-          path = Path("app/build.gradle.kts")
+          path = Path(
+              "app/build.gradle.kts"
+          )
 
           text = path.read_text(
               encoding="utf-8"
@@ -247,8 +341,6 @@ jobs:
                   "❌ Bloc android { introuvable."
               )
 
-          # Supprimer uniquement les anciennes
-          # déclarations sbhVersion*
           patterns = [
               r'(?ms)^[ \t]*val\s+sbhVersionText\s*=.*?(?=^[ \t]*(?:val\s+|android\s*\{)|\Z)',
               r'(?ms)^[ \t]*val\s+sbhVersionCode\s*=.*?(?=^[ \t]*(?:val\s+|android\s*\{)|\Z)',
@@ -269,7 +361,7 @@ jobs:
 
           if not match:
               raise SystemExit(
-                  "❌ Impossible de trouver android {"
+                  "❌ android { introuvable."
               )
 
           block = r'''
@@ -284,346 +376,4 @@ jobs:
                   ?: error("version.json: versionCode manquant")
 
           val sbhVersionName: String =
-              Regex("""["]versionName["]\s*:\s*["]([^"]+)["]""")
-                  .find(sbhVersionText)
-                  ?.groupValues
-                  ?.get(1)
-                  ?: error("version.json: versionName manquant")
-          '''
-
-          text = (
-              text[:match.start()]
-              + block.strip()
-              + "\n\n"
-              + text[match.start():].lstrip()
-          )
-
-          path.write_text(
-              text,
-              encoding="utf-8"
-          )
-
-          final_text = path.read_text(
-              encoding="utf-8"
-          )
-
-          if final_text.count(
-              "val sbhVersionText"
-          ) != 1:
-              raise SystemExit(
-                  "❌ sbhVersionText n'est pas unique."
-              )
-
-          if final_text.count(
-              "val sbhVersionCode"
-          ) != 1:
-              raise SystemExit(
-                  "❌ sbhVersionCode n'est pas unique."
-              )
-
-          if final_text.count(
-              "val sbhVersionName"
-          ) != 1:
-              raise SystemExit(
-                  "❌ sbhVersionName n'est pas unique."
-              )
-
-          print(
-              "✅ Déclarations de version Gradle propres."
-          )
-          PY
-
-      # ============================================================
-      # 8. CORRIGER IMPORTS MAP EDITOR
-      # ============================================================
-      - name: Corriger les imports Kotlin connus
-        working-directory: ${{ steps.project.outputs.root }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          MAP_FILE="app/src/main/java/com/sbh/studio/mapeditor/MapEditorScreen.kt"
-
-          if [ ! -f "$MAP_FILE" ]; then
-            echo "❌ MapEditorScreen.kt introuvable."
-            exit 1
-          fi
-
-          python3 <<'PY'
-          from pathlib import Path
-
-          path = Path(
-              "app/src/main/java/com/sbh/studio/mapeditor/MapEditorScreen.kt"
-          )
-
-          text = path.read_text(
-              encoding="utf-8"
-          )
-
-          imports = []
-
-          if "fillMaxWidth" in text:
-              imports.append(
-                  "import androidx.compose.foundation.layout.fillMaxWidth"
-              )
-
-          if ".height(" in text:
-              imports.append(
-                  "import androidx.compose.foundation.layout.height"
-              )
-
-          lines = text.splitlines()
-
-          package_index = None
-
-          for i, line in enumerate(lines):
-              if line.startswith("package "):
-                  package_index = i
-                  break
-
-          if package_index is None:
-              raise SystemExit(
-                  "❌ package introuvable."
-              )
-
-          existing = set(lines)
-
-          missing = [
-              item
-              for item in imports
-              if item not in existing
-          ]
-
-          if missing:
-              insert_at = package_index + 1
-
-              while (
-                  insert_at < len(lines)
-                  and (
-                      lines[insert_at].strip() == ""
-                      or lines[insert_at].startswith("import ")
-                  )
-              ):
-                  insert_at += 1
-
-              for item in reversed(missing):
-                  lines.insert(
-                      insert_at,
-                      item
-                  )
-
-              path.write_text(
-                  "\n".join(lines) + "\n",
-                  encoding="utf-8"
-              )
-
-              for item in missing:
-                  print(
-                      f"✅ Import ajouté : {item}"
-                  )
-          else:
-              print(
-                  "✅ Imports Compose déjà présents."
-              )
-          PY
-
-      # ============================================================
-      # 9. DIAGNOSTIC REPORTS SCREEN
-      # ============================================================
-      - name: Diagnostiquer ReportsScreen
-        working-directory: ${{ steps.project.outputs.root }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          REPORT_FILE="app/src/main/java/com/sbh/studio/ui/ReportsScreen.kt"
-
-          if [ ! -f "$REPORT_FILE" ]; then
-            echo "❌ ReportsScreen.kt introuvable."
-            exit 1
-          fi
-
-          echo "=========================================="
-          echo " REPORTS SCREEN"
-          echo "=========================================="
-
-          echo ""
-          echo "Lignes 120 à 180 :"
-
-          nl -ba "$REPORT_FILE" \
-            | sed -n '120,180p'
-
-          echo ""
-          echo "Occurrences SUCCESS :"
-
-          grep -n -C 4 \
-            "SUCCESS" \
-            "$REPORT_FILE" || true
-
-          echo ""
-          echo "États et classes de rapport :"
-
-          grep -RInE \
-            'enum class .*Status|sealed class .*Status|SUCCESS|READY_TO_SEND|IMPORT_CONFIRMED' \
-            app/src/main/java/com/sbh/studio \
-            --include='*.kt' \
-            | head -n 250 || true
-
-      # ============================================================
-      # 10. VALIDATION SBH
-      # ============================================================
-      - name: Validation SBh Studio
-        working-directory: ${{ steps.project.outputs.root }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if [ -f "tools/validate_sbh.py" ]; then
-            python3 tools/validate_sbh.py
-          else
-            echo "⚠️ tools/validate_sbh.py absent."
-          fi
-
-      # ============================================================
-      # 11. GRADLE WRAPPER
-      # ============================================================
-      - name: Préparer Gradle
-        working-directory: ${{ steps.project.outputs.root }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          chmod +x gradlew
-
-          echo "=========================================="
-          echo " VERSION GRADLE"
-          echo "=========================================="
-
-          ./gradlew --version
-
-      # ============================================================
-      # 12. NETTOYAGE
-      # ============================================================
-      - name: Nettoyer le projet
-        working-directory: ${{ steps.project.outputs.root }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          ./gradlew \
-            clean \
-            --no-daemon \
-            --stacktrace
-
-      # ============================================================
-      # 13. COMPILATION APK
-      # ============================================================
-      - name: Compiler APK Debug
-        working-directory: ${{ steps.project.outputs.root }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "=========================================="
-          echo " COMPILATION SBH STUDIO"
-          echo "=========================================="
-
-          ./gradlew \
-            assembleDebug \
-            --no-daemon \
-            --stacktrace \
-            --warning-mode all
-
-      # ============================================================
-      # 14. TROUVER APK
-      # ============================================================
-      - name: Vérifier APK
-        id: apk
-        working-directory: ${{ steps.project.outputs.root }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          APK="$(find app/build/outputs/apk/debug \
-            -type f \
-            -name '*.apk' \
-            -print \
-            | head -n 1)"
-
-          if [ -z "$APK" ]; then
-            echo "❌ Aucun APK généré."
-
-            echo ""
-            echo "===== FICHIERS BUILD ====="
-
-            find app/build/outputs \
-              -type f \
-              -print \
-              | sort || true
-
-            exit 1
-          fi
-
-          echo "=========================================="
-          echo " APK TROUVÉ"
-          echo "=========================================="
-
-          echo "$APK"
-
-          SHA256="$(
-            sha256sum "$APK" \
-            | awk '{print $1}'
-          )"
-
-          echo ""
-          echo "SHA-256 :"
-          echo "$SHA256"
-
-          echo "apk=$APK" >> "$GITHUB_OUTPUT"
-          echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
-
-      # ============================================================
-      # 15. COPIE APK FINAL
-      # ============================================================
-      - name: Préparer APK final
-        working-directory: ${{ steps.project.outputs.root }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          mkdir -p release
-
-          APK="${{ steps.apk.outputs.apk }}"
-
-          FINAL_APK="release/SBhStudio-V${{ steps.version.outputs.version }}-debug.apk"
-
-          cp "$APK" "$FINAL_APK"
-
-          sha256sum "$FINAL_APK" \
-            > "${FINAL_APK}.sha256"
-
-          echo ""
-          echo "=========================================="
-          echo " SBH STUDIO BUILD TERMINÉ"
-          echo "=========================================="
-
-          echo "Version : ${{ steps.version.outputs.version }}"
-          echo "Code    : ${{ steps.version.outputs.code }}"
-
-          echo ""
-          echo "Fichiers générés :"
-
-          ls -lh release/
-
-      # ============================================================
-      # 16. PUBLIER APK DANS GITHUB ACTIONS
-      # ============================================================
-      - name: Publier APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: SBh-Studio-V${{ steps.version.outputs.version }}-APK
-          path: |
-            ${{ steps.project.outputs.root }}/release/*.apk
-            ${{ steps.project.outputs.root }}/release/*.sha256
-          if-no-files-found: error
-          retention-days: 30
+              Regex
